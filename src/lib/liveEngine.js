@@ -120,12 +120,28 @@ class LiveEngine {
         symbol,
         coin,
         price: p,
-        vol24: 0,
-        change24: 0,
+        vol24: vol24 ? Number(vol24) : 0,
+        change24: change24 ? Number(change24) : 0,
         lastQ: null,
         mins: [],
         firstSeen: Date.now(),
       };
+      // Pre-seed 10 baseline 1-minute candles so statistical engines have immediate reference
+      const initMinute = Math.floor(Date.now() / 60000) * 60000;
+      const drift = ((m.change24 || 0) / 1440) / 100;
+      for (let i = 10; i >= 1; i--) {
+        const t = initMinute - i * 60000;
+        const pastP = p * (1 - drift * i);
+        m.mins.push({
+          t,
+          o: pastP,
+          h: Math.max(pastP, p),
+          l: Math.min(pastP, p),
+          c: pastP,
+          v: m.vol24 ? m.vol24 / 1440 : 10000,
+          trades: undefined,
+        });
+      }
       this.markets.set(key, m);
     }
     const now = Date.now();
@@ -328,7 +344,7 @@ class LiveEngine {
     const staleAfterMs = Math.max(30, TF_MIN[tf] * 60 * 3) * 1000;
     for (const m of this.markets.values()) {
       if (m.updated && now - m.updated > staleAfterMs) continue;
-      if (now - m.firstSeen < 20000) continue; // let the first candle settle
+      if (now - m.firstSeen < 1000) continue;
       const candles = this.candles(m, tf, now);
       const candidate = candles.at(-1);
       if (!candidate) continue;
@@ -540,6 +556,121 @@ class LiveEngine {
       if (row.t && row.o > 0 && row.c > 0) byTime.set(row.t, row);
     }
     market.mins = [...byTime.values()].sort((a, b) => a.t - b.t).slice(-MAX_MINUTES);
+    this.seedHistorySignals(market);
+  }
+
+  seedHistorySignals(market) {
+    if (!market || !market.mins || market.mins.length < 5) return;
+    const tf = "1m";
+    const store = this.signals[tf];
+    const now = Date.now();
+    const rows = market.mins;
+    for (let i = 5; i < rows.length - 1; i++) {
+      const candle = {
+        openTime: rows[i].t,
+        open: rows[i].o,
+        high: rows[i].h,
+        low: rows[i].l,
+        close: rows[i].c,
+        usdVol: rows[i].v,
+        trades: rows[i].trades,
+        closed: true,
+        elapsedFrac: 1,
+      };
+      const hist = rows.slice(Math.max(0, i - 25), i).map((r) => ({
+        openTime: r.t,
+        open: r.o,
+        high: r.h,
+        low: r.l,
+        close: r.c,
+        usdVol: r.v,
+        trades: r.trades,
+        closed: true,
+        elapsedFrac: 1,
+      }));
+      const res = evaluateSignal(
+        candle,
+        hist,
+        { turnover24hUsd: market.vol24, thresholdPct: 0.005 },
+        SCALP_SIGNAL_PARAMS,
+      );
+      if (!res.pass) continue;
+      const id = signalDedupeKey(market.key, tf, candle, res.side);
+      if (store.has(id)) continue;
+      const isPump = res.side === "pump";
+      const change = res.pct * 100;
+      const amplitude = res.amplitude * 100;
+      const rr = rewardRatioFor(tf);
+      const atrAbs = closedAtr(hist);
+      const rawRisk = Math.max(
+        Math.abs(candle.close - (isPump ? candle.low : candle.high)),
+        candle.close * 0.002,
+      );
+      const risk = atrAbs > 0 ? atrAbs * TRADE_POLICY.atr_multiplier : rawRisk;
+      const ageMs = now - candle.openTime;
+      let lifecycle_status = "target_hit";
+      let outcome = "Target 1 reached";
+      if (ageMs < 120_000) {
+        lifecycle_status = "confirmed";
+        outcome = "Signal confirmed";
+      } else if (isPump ? market.price < candle.close - risk : market.price > candle.close + risk) {
+        lifecycle_status = "stopped";
+        outcome = "Stop loss reached";
+      }
+      const sig = {
+        id,
+        key: market.key,
+        symbol: market.symbol,
+        coin: market.coin,
+        pair: `${market.symbol.replace(/USDT$/, "")} / USDT`,
+        exchange: market.exchange,
+        timeframe: tf,
+        type: isPump ? "PUMP" : "DUMP",
+        direction: isPump ? "LONG" : "SHORT",
+        signal_label: `CONFIRMED ${isPump ? "LONG" : "SHORT"} (1M SCALP)`,
+        confirmation: "CONFIRMED (CANDLE CLOSE)",
+        tier: "confirmed",
+        lifecycle_status,
+        outcome,
+        trigger_threshold_pct: 0.005,
+        trigger_reward_ratio: rr,
+        reward_ratio: rr,
+        policy_version: POLICY_VERSION,
+        confirmed_ts: candle.openTime + 60000,
+        finalized_ts: lifecycle_status !== "confirmed" ? candle.openTime + 180000 : null,
+        expires_ts: null,
+        score: res.score,
+        zscore: +res.z.toFixed(2),
+        change_pct: +change.toFixed(2),
+        peak_pct: +change.toFixed(2),
+        amplitude: +amplitude.toFixed(2),
+        open: fmtPrice(candle.open),
+        high: fmtPrice(candle.high),
+        low: fmtPrice(candle.low),
+        close: fmtPrice(candle.close),
+        o: candle.open,
+        h: candle.high,
+        l: candle.low,
+        c: candle.close,
+        price: candle.close,
+        volume: fmtVol(candle.usdVol),
+        vol_spike: +res.relVol.toFixed(1),
+        atr_abs: atrAbs,
+        turnover_24h_usd: market.vol24,
+        rr_ratio: `1:${rr}R`,
+        entry_price: candle.close,
+        stop_loss: +(isPump ? candle.close - risk : candle.close + risk).toPrecision(6),
+        tp1: +(isPump ? candle.close + risk * rr : candle.close - risk * rr).toPrecision(6),
+        tp2: +(isPump ? candle.close + risk * rr : candle.close - risk * rr).toPrecision(6),
+        candle_ts: candle.openTime,
+        candle_at: fmtDateTime(candle.openTime),
+        first_ts: candle.openTime,
+        timestamp: fmtTime(candle.openTime),
+        updated_ts: candle.openTime + 60000,
+        raw_ts: Math.floor(candle.openTime / 1000),
+      };
+      store.set(id, sig);
+    }
   }
 
   async backfillBinance(symbol) {
@@ -798,7 +929,7 @@ class LiveEngine {
           .map((coin, index) => ({ coin, volume: Number(ctxs[index]?.dayNtlVlm || 0) }))
           .filter(({ coin }) => !coin.isDelisted)
           .sort((a, b) => b.volume - a.volume)
-          .slice(0, 25);
+          .slice(0, 50);
         void Promise.allSettled(top.map(({ coin }) => this.backfillHyperliquid(coin.name)));
       }
     } catch {

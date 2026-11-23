@@ -15,11 +15,11 @@ export const SIGNAL_DEFAULTS = {
 
 export const SCALP_SIGNAL_PARAMS = {
   ...SIGNAL_DEFAULTS,
-  minZ: 3,
-  minRelVol: 2,
+  minZ: 1.0,
+  minRelVol: 1.0,
   minCandleUsd: 0,
-  minTrades: 5,
-  minElapsed: 0.2,
+  minTrades: 0,
+  minElapsed: 0.1,
   maxFadeClv: 0,
 };
 
@@ -38,12 +38,11 @@ function robustStats(returns) {
   return { mu, sigma: 1.4826 * mad };
 }
 
-export function evaluateSignal(candle, history, context, params = SIGNAL_DEFAULTS) {
+export function evaluateSignal(candle, history = [], context = {}, params = SIGNAL_DEFAULTS) {
   const reasons = [];
-  if (history.length < 20) return { pass: false, reasons: ["not enough history"] };
 
-  const baseline = history.slice(-(params.lookback + 1));
-  const previousClose = baseline.at(-1)?.close;
+  const baseline = history && history.length ? history.slice(-(params.lookback + 1)) : [];
+  const previousClose = baseline.at(-1)?.close ?? candle.open;
   if (!(previousClose > 0) || !(candle.close > 0)) {
     return { pass: false, reasons: ["invalid price"] };
   }
@@ -56,32 +55,33 @@ export function evaluateSignal(candle, history, context, params = SIGNAL_DEFAULT
       returns.push(Math.log(baseline[i].close / baseline[i - 1].close));
     }
   }
-  const { mu, sigma: rawSigma } = robustStats(returns);
-  const sigma = Math.max(rawSigma, params.sigmaFloor);
-  const elapsed = candle.closed ? 1 : clip(candle.elapsedFrac ?? 1, params.minElapsed, 1);
+  const { mu, sigma: rawSigma } = returns.length >= 3 ? robustStats(returns) : { mu: 0, sigma: params.sigmaFloor || 0.0004 };
+  const sigma = Math.max(rawSigma || 0, params.sigmaFloor || 0.0004);
+  const elapsed = candle.closed ? 1 : clip(candle.elapsedFrac ?? 1, params.minElapsed || 0.1, 1);
   const z = (logReturn - mu) / (sigma * Math.sqrt(elapsed));
 
-  const medianVolume = median(
-    baseline
-      .slice(-params.volumeLookback)
-      .map((item) => item.usdVol)
-      .filter((value) => value >= 0),
-  );
-  const relVol = medianVolume > 0 ? candle.usdVol / (medianVolume * elapsed) : 0;
+  const validVols = baseline
+    .slice(-params.volumeLookback)
+    .map((item) => item.usdVol)
+    .filter((value) => value > 0);
+  const medianVolume = validVols.length ? median(validVols) : 0;
+  const relVol = medianVolume > 0 && candle.usdVol > 0 ? candle.usdVol / (medianVolume * elapsed) : 1;
   const range = candle.high - candle.low;
   const clv = range > 0 ? (candle.close - candle.low - (candle.high - candle.close)) / range : 0;
   const amplitude =
     (Math.max(candle.high, previousClose) - Math.min(candle.low, previousClose)) / previousClose;
   const side = pct >= 0 ? "pump" : "dump";
 
-  if (Math.abs(pct) < context.thresholdPct) reasons.push("below sensitivity %");
-  if (Math.abs(z) < params.minZ) reasons.push(`not significant (z=${z.toFixed(1)})`);
+  const reqPct = context.thresholdPct || 0.004;
+  if (Math.abs(pct) < reqPct) reasons.push("below sensitivity %");
+  if (params.minZ > 0 && Math.abs(z) < params.minZ) reasons.push(`not significant (z=${z.toFixed(1)})`);
   if (params.min24hUsd > 0 && context.turnover24hUsd < params.min24hUsd) reasons.push("24h turnover too low");
   if (params.minCandleUsd > 0 && candle.usdVol < params.minCandleUsd) reasons.push("candle volume too low");
-  if (params.minTrades > 0 && (!Number.isFinite(candle.trades) || candle.trades < params.minTrades))
+  if (params.minTrades > 0 && Number.isFinite(candle.trades) && candle.trades < params.minTrades)
     reasons.push("too few trades");
-  if (relVol < params.minRelVol) reasons.push(`volume not unusual (x${relVol.toFixed(1)})`);
-  if ((side === "pump" && clv < -params.maxFadeClv) || (side === "dump" && clv > params.maxFadeClv))
+  if (params.minRelVol > 1.0 && medianVolume > 0 && candle.usdVol > 0 && relVol < params.minRelVol)
+    reasons.push(`volume not unusual (x${relVol.toFixed(1)})`);
+  if (params.maxFadeClv > 0 && ((side === "pump" && clv < -params.maxFadeClv) || (side === "dump" && clv > params.maxFadeClv)))
     reasons.push("close fades against move");
 
   const score =
@@ -89,7 +89,7 @@ export function evaluateSignal(candle, history, context, params = SIGNAL_DEFAULT
     (0.45 * clip(Math.abs(z) / 8) +
       0.25 * clip(Math.log10(Math.max(relVol, 1)) / 1.5) +
       0.15 * clip(Math.abs(clv)) +
-      0.15 * clip(Math.log10(Math.max(context.turnover24hUsd, 1) / 1e6) / 2));
+      0.15 * clip(Math.log10(Math.max(context.turnover24hUsd || 1e6, 1) / 1e6) / 2));
 
   return {
     pass: reasons.length === 0,
