@@ -1,0 +1,28 @@
+services:
+  # ----------------------------------------------------------------------------
+  # Coinwach.io — Institutional Perpetual Scanner (Backend + Ingestors + UI)
+  # Deployable on Render Free Tier in Frankfurt (Germany) for 100% Exchange Access
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: coinwatch
+    runtime: python
+    plan: free
+    region: frankfurt
+    buildCommand: |
+      npm install
+      npm run build
+      pip install -r backend/requirements.txt
+    startCommand: uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: EXCHANGES_ENABLED
+        value: "hyperliquid,binance,bybit,okx"
+      - key: PYTHONPATH
+        value: backend
+      - key: PYTHONUNBUFFERED
+        value: "1"

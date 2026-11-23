@@ -1,0 +1,11 @@
+{
+  "title": "Coinwach.io",
+  "description": "Track cryptocurrency prices and market trends in one place, helping investors and enthusiasts monitor coins and make informed decisions.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

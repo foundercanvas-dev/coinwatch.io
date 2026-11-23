@@ -1,0 +1,45 @@
+{
+  "policy_version": "1.0.0",
+  "timeframes": {
+    "1m": { "minutes": 1, "reward_ratio": 1.5, "ttl_seconds": 60 },
+    "5m": { "minutes": 5, "reward_ratio": 2.0, "ttl_seconds": 300 },
+    "15m": { "minutes": 15, "reward_ratio": 3.0, "ttl_seconds": 900 },
+    "1h": { "minutes": 60, "reward_ratio": 4.0, "ttl_seconds": 3600 },
+    "4h": { "minutes": 240, "reward_ratio": 6.0, "ttl_seconds": 14400 }
+  },
+  "sensitivity": {
+    "default_pct": 0.8,
+    "detection_floor_pct": 0.4,
+    "min_pct": 0.5,
+    "max_pct": 25.0,
+    "base_presets_pct": [0.5, 0.8, 1.0, 1.5, 2.0],
+    "scale": "sqrt_time"
+  },
+  "signal_gates": {
+    "lookback": 60,
+    "volume_lookback": 20,
+    "min_z": 3.0,
+    "min_rel_vol": 2.0,
+    "min_candle_usd": 0.0,
+    "min_24h_usd": 0.0,
+    "min_trades": 5,
+    "sigma_floor": 0.0004,
+    "min_elapsed": 0.2,
+    "max_fade_clv": 0.0
+  },
+  "trade": {
+    "atr_multiplier": 1.2,
+    "taker_fee_per_side": 0.00055,
+    "min_net_rr": 1.2,
+    "min_atr_cost_multiple": 4.0
+  },
+  "liquidity_tiers_usd": [
+    500000,
+    1000000,
+    2000000,
+    5000000,
+    10000000,
+    25000000,
+    50000000
+  ]
+}

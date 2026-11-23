@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VENV="${HOME}/.cache/coinwatch-venv"
+BACKEND_URL="http://127.0.0.1:8000/api/health"
+
+backend_pid=""
+frontend_pid=""
+
+cleanup() {
+  trap - EXIT INT TERM
+  [ -z "${frontend_pid}" ] || kill "${frontend_pid}" 2>/dev/null || true
+  [ -z "${backend_pid}" ] || kill "${backend_pid}" 2>/dev/null || true
+  [ -z "${frontend_pid}" ] || wait "${frontend_pid}" 2>/dev/null || true
+  [ -z "${backend_pid}" ] || wait "${backend_pid}" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+PYTHONPATH=backend "${VENV}/bin/python" -m uvicorn app.main:app \
+  --host 127.0.0.1 \
+  --port 8000 &
+backend_pid=$!
+
+for _ in $(seq 1 60); do
+  if curl --fail --silent --show-error "${BACKEND_URL}" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "${backend_pid}" 2>/dev/null; then
+    wait "${backend_pid}"
+  fi
+  sleep 0.25
+done
+
+if ! curl --fail --silent --show-error "${BACKEND_URL}" >/dev/null 2>&1; then
+  echo "FastAPI backend did not become ready at ${BACKEND_URL}" >&2
+  exit 1
+fi
+
+pnpm exec vite --port "${PORT}" --host "${FIGMA_DEV_SERVER_HOST:-0.0.0.0}" &
+frontend_pid=$!
+
+set +e
+wait -n "${backend_pid}" "${frontend_pid}"
+status=$?
+set -e
+exit "${status}"

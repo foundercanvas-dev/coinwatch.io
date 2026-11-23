@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pnpm install --frozen-lockfile
+
+VENV="${HOME}/.cache/coinwatch-venv"
+mkdir -p "$(dirname "${VENV}")"
+
+# Bootstrap restarts can overlap; serialize writes to the shared cached venv.
+exec 9>"${VENV}.lock"
+flock 9
+
+if ! "${VENV}/bin/python" -m pip --version >/dev/null 2>&1; then
+  rm -rf "${VENV}"
+  python -m venv "${VENV}"
+fi
+"${VENV}/bin/python" -m pip install \
+  --disable-pip-version-check \
+  --requirement backend/requirements.txt
