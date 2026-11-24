@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ChartLineUp,
+  Stack,
   ClipboardText,
   ChartBar,
   GearSix,
@@ -20,6 +21,7 @@ import { BrandMark, BRAND } from "./ui";
 
 export const NAV_ITEMS = [
   { id: "pump_dump", label: "Pump / Dump", icon: ChartLineUp },
+  { id: "order_flow", label: "Order Flow", icon: Stack },
   { id: "correlation", label: "Correlation", icon: ShareNetwork },
   { id: "markets", label: "Markets", icon: ChartBar },
   { id: "settings", label: "Settings", icon: GearSix },

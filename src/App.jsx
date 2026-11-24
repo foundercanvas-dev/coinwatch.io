@@ -9,6 +9,7 @@ import MarketDetail from "./components/MarketDetail";
 import useLiveMarket from "./lib/useLiveMarket";
 import POAModal from "./components/POAModal";
 import CorrelationView from "./components/CorrelationView";
+import OrderFlowView from "./components/OrderFlowView";
 import { rewardRatioFor, SENSITIVITY_POLICY } from "./lib/signalPolicy";
 
 export default function App() {
@@ -75,6 +76,7 @@ export default function App() {
   // Hash routing: #/scanner, #/correlation, #/poa, #/markets, #/settings, #/market/SYMBOL
   const NAV_TO_PATH = {
     pump_dump: "scanner",
+    order_flow: "orderflow",
     correlation: "correlation",
     poa: "poa",
     markets: "markets",
@@ -405,6 +407,14 @@ export default function App() {
               marketRows={viewRows}
               historyClearedAt={historyClearedAt}
               onClearHistory={() => setHistoryClearedAt(Date.now())}
+            />
+          )}
+
+          {activeNav === "order_flow" && (
+            <OrderFlowView
+              risk={risk}
+              onSelectCoin={openMarket}
+              soundEnabled={soundEnabled}
             />
           )}
 
