@@ -111,6 +111,14 @@ class LiveEngine {
   tick(exchange, symbol, price, { cumQuote, vol24, coin, change24 } = {}) {
     const p = Number(price);
     if (!Number.isFinite(p) || p <= 0) return;
+    if (
+      !symbol ||
+      symbol.startsWith("#") ||
+      symbol.startsWith("@") ||
+      (coin && (coin.startsWith("#") || coin.startsWith("@") || /^\d+$/.test(coin.replace(/^#/, ""))))
+    ) {
+      return;
+    }
     const key = `${exchange}:${symbol}`;
     let m = this.markets.get(key);
     if (!m) {
@@ -343,6 +351,13 @@ class LiveEngine {
     const now = Date.now();
     const staleAfterMs = Math.max(30, TF_MIN[tf] * 60 * 3) * 1000;
     for (const m of this.markets.values()) {
+      if (
+        m.symbol.startsWith("#") ||
+        m.symbol.startsWith("@") ||
+        (m.coin && (m.coin.startsWith("#") || m.coin.startsWith("@") || /^\d+$/.test(m.coin.replace(/^#/, ""))))
+      ) {
+        continue;
+      }
       if (m.updated && now - m.updated > staleAfterMs) continue;
       if (now - m.firstSeen < 1000) continue;
       const candles = this.candles(m, tf, now);
@@ -495,6 +510,13 @@ class LiveEngine {
     const staleAfterMs = Math.max(30, TF_MIN[this.timeframe] * 60 * 3) * 1000;
     const now = Date.now();
     for (const m of this.markets.values()) {
+      if (
+        m.symbol.startsWith("#") ||
+        m.symbol.startsWith("@") ||
+        (m.coin && (m.coin.startsWith("#") || m.coin.startsWith("@") || /^\d+$/.test(m.coin.replace(/^#/, ""))))
+      ) {
+        continue;
+      }
       if (m.updated && now - m.updated > staleAfterMs) continue;
       const c1 = this.changeOver(m, 1);
       const c5 = this.changeOver(m, 5);
@@ -561,6 +583,13 @@ class LiveEngine {
 
   seedHistorySignals(market) {
     if (!market || !market.mins || market.mins.length < 5) return;
+    if (
+      market.symbol.startsWith("#") ||
+      market.symbol.startsWith("@") ||
+      (market.coin && (market.coin.startsWith("#") || market.coin.startsWith("@") || /^\d+$/.test(market.coin.replace(/^#/, ""))))
+    ) {
+      return;
+    }
     const tf = "1m";
     const store = this.signals[tf];
     const now = Date.now();
@@ -951,7 +980,14 @@ class LiveEngine {
         if (msg.channel !== "allMids") return;
         const mids = msg.data?.mids || {};
         for (const coin in mids) {
-          if (coin.startsWith("@") || coin.includes("/")) continue; // spot pairs
+          if (
+            coin.startsWith("@") ||
+            coin.startsWith("#") ||
+            coin.includes("/") ||
+            /^\d+$/.test(coin.replace(/^#/, ""))
+          ) {
+            continue;
+          }
           this.tick("hyperliquid", `${coin}USDT`, mids[coin], { coin });
         }
       },

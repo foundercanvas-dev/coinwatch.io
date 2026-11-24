@@ -75,6 +75,7 @@ export function evaluateSignal(candle, history = [], context = {}, params = SIGN
   const reqPct = context.thresholdPct || 0.004;
   if (Math.abs(pct) < reqPct) reasons.push("below sensitivity %");
   if (params.minZ > 0 && Math.abs(z) < params.minZ) reasons.push(`not significant (z=${z.toFixed(1)})`);
+  if (candle.usdVol <= 0 && (context.turnover24hUsd || 0) < 10000) reasons.push("zero volume / illiquid");
   if (params.min24hUsd > 0 && context.turnover24hUsd < params.min24hUsd) reasons.push("24h turnover too low");
   if (params.minCandleUsd > 0 && candle.usdVol < params.minCandleUsd) reasons.push("candle volume too low");
   if (params.minTrades > 0 && Number.isFinite(candle.trades) && candle.trades < params.minTrades)
