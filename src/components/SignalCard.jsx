@@ -235,10 +235,10 @@ export default function SignalCard({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onOpenPOA?.(signal);
+              onSelect?.(signal);
             }}
-            title="Create Plan of Attack"
-            aria-label={`Create Plan of Attack for ${base}`}
+            title={`Open ${base} chart`}
+            aria-label={`Open ${base} chart`}
             className="w-8 h-8 -mr-1 rounded-full flex items-center justify-center text-fog hover:text-snow hover:bg-white/[0.06] transition-colors"
           >
             <CaretRight

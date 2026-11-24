@@ -21,7 +21,6 @@ import { BrandMark, BRAND } from "./ui";
 export const NAV_ITEMS = [
   { id: "pump_dump", label: "Pump / Dump", icon: ChartLineUp },
   { id: "correlation", label: "Correlation", icon: ShareNetwork },
-  { id: "poa", label: "POA", icon: ClipboardText },
   { id: "markets", label: "Markets", icon: ChartBar },
   { id: "settings", label: "Settings", icon: GearSix },
 ];

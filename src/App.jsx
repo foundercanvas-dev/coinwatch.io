@@ -398,7 +398,6 @@ export default function App() {
               historySignals={viewHistory}
               selectedCoin={selectedCoin}
               onSelectCoin={openMarket}
-              onOpenPOA={(coin) => setPoaTargetCoin(coin)}
               isConnected={viewConnected}
               sourceLabel={sourceLabel}
               minLiquidity={minLiquidity}
@@ -419,24 +418,8 @@ export default function App() {
               filters={filters}
               setFilters={setFilters}
               onSelectCoin={openMarket}
-              onOpenPOA={(coin) => setPoaTargetCoin(coin)}
               isConnected={viewConnected}
               sourceLabel={sourceLabel}
-            />
-          )}
-
-          {activeNav === "poa" && (
-            <POAView
-              onOpenNewPOA={(coin) => setPoaTargetCoin(coin)}
-              historySignals={viewHistory.filter(
-                (s) => !historyClearedAt || (s.raw_ts || 0) * 1000 > historyClearedAt,
-              )}
-              sensitivity={sensitivity}
-              risk={risk}
-              rewardRatio={rewardRatio}
-              activity={activity}
-              onActivity={logActivity}
-              setActiveNav={setActiveNav}
             />
           )}
 
@@ -458,29 +441,11 @@ export default function App() {
               sensitivity={sensitivity}
               risk={risk}
               onBack={() => setActiveNav(returnNav)}
-              onOpenPOA={(coin) => setPoaTargetCoin(coin)}
               setActiveNav={setActiveNav}
             />
           )}
         </div>
       </main>
-
-      {poaTargetCoin && (
-        <POAModal
-          coin={poaTargetCoin}
-          risk={risk}
-          onClose={() => setPoaTargetCoin(null)}
-          onSave={(poa) =>
-            logActivity({
-              type: poa.status === "ARMED" ? "armed" : "draft",
-              symbol: poa.symbol,
-              exchange: poa.exchange,
-              side: poa.side,
-              poaId: poa.id,
-            })
-          }
-        />
-      )}
     </div>
   );
 }

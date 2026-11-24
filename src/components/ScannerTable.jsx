@@ -197,15 +197,6 @@ export default function ScannerTable({ data = [], onSelectCoin, onOpenPOA, favor
                       >
                         <ChartLine weight="duotone" className="w-4 h-4" />
                       </button>
-                      {onOpenPOA && (
-                        <button
-                          onClick={() => onOpenPOA(row)}
-                          title="Create Plan of Attack"
-                          className="h-7 px-3 rounded-full border border-white/[0.08] text-[11px] text-fog hover:text-mint hover:border-mint/35 transition-colors"
-                        >
-                          POA
-                        </button>
-                      )}
                     </div>
                   </td>
                 </tr>

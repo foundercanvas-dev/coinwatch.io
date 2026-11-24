@@ -307,20 +307,6 @@ class LiveEngine {
           signal.finalized_ts = now;
           signal.updated_ts = now;
           signal.outcome = "Confirmation candle unavailable";
-        } else {
-          // If actively forming, check if price faded
-          const isLong = signal.direction === "LONG";
-          const openPrice = Number(signal.o || m.price);
-          if (openPrice > 0) {
-            const liveMove = ((m.price - openPrice) / openPrice) * 100;
-            const thresh = Number(signal.trigger_threshold_pct || 0.005) * 100;
-            if ((isLong && liveMove < thresh * 0.3) || (!isLong && liveMove > -thresh * 0.3)) {
-              signal.lifecycle_status = "invalidated";
-              signal.finalized_ts = now;
-              signal.updated_ts = now;
-              signal.outcome = "Move faded while forming";
-            }
-          }
         }
       }
       if (signal.lifecycle_status === "confirmed") {

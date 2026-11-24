@@ -606,9 +606,29 @@ export default function MarketDetail({
       }
     : null;
 
+  const lockedStateRef = useRef(null);
+
   useEffect(() => {
+    const sigKey = `${exchange}:${symbol}:${signal?.id ?? signal?.candle_ts ?? "live"}`;
+    const locked = lockedStateRef.current;
+
+    // Never allow a locked terminal/confirmed state to flip-flop back to watching or invalidated
     const sourceState = signal?.lifecycle_status;
+    if (locked && locked.key === sigKey) {
+      if (locked.state === "invalidated" || locked.state === "stopped") {
+        return undefined;
+      }
+      if (locked.state === "confirmed") {
+        if (sourceState === "stopped") {
+          lockedStateRef.current = { key: sigKey, state: "stopped", side: locked.side };
+          setBiasWindow((prev) => ({ ...prev, state: "stopped", reason: "Stop loss reached" }));
+        }
+        return undefined;
+      }
+    }
+
     if (sourceState && sourceState !== "confirming") {
+      lockedStateRef.current = { key: sigKey, state: sourceState, side: signal.direction?.toLowerCase() || null };
       setBiasWindow({
         state: sourceState,
         side: signal.direction?.toLowerCase() || null,
@@ -621,6 +641,7 @@ export default function MarketDetail({
       });
       return undefined;
     }
+
     const windowSec = confirmationWindowSeconds(biasModel, Boolean(signal));
     biasTrackerRef.current = new BiasSignalTracker({
       cooldownSec: 30,
@@ -631,17 +652,23 @@ export default function MarketDetail({
     });
     setBiasWindow(biasTrackerRef.current.snapshot(Date.now() / 1000));
     const update = () => {
+      const curLock = lockedStateRef.current;
+      if (curLock && curLock.key === sigKey && ["confirmed", "invalidated", "stopped"].includes(curLock.state)) {
+        return;
+      }
       const input = biasInputRef.current;
       if (!input) return;
-      setBiasWindow(
-        biasTrackerRef.current.update(
-          Date.now() / 1000,
-          input.score,
-          input.price,
-          input.atrAbs,
-          input.tradable,
-        ),
+      const next = biasTrackerRef.current.update(
+        Date.now() / 1000,
+        input.score,
+        input.price,
+        input.atrAbs,
+        input.tradable,
       );
+      if (["confirmed", "invalidated", "stopped"].includes(next.state)) {
+        lockedStateRef.current = { key: sigKey, state: next.state, side: next.side };
+      }
+      setBiasWindow(next);
     };
     update();
     const timer = setInterval(update, 1000);
@@ -655,7 +682,6 @@ export default function MarketDetail({
     signal?.direction,
     signal?.outcome,
     signal?.expires_ts,
-    biasModel.ready,
   ]);
 
   const terminalState = ["invalidated", "expired", "stopped", "reversed", "target_hit"].includes(
@@ -780,8 +806,8 @@ export default function MarketDetail({
         description={`Live market feed with real-time data · ${exchangeName(exchange)} perpetual`}
         actions={
           <>
-            <button onClick={onBack} className="cw-btn !h-9">
-              <ArrowLeft weight="bold" className="w-4 h-4" /> Back
+            <button onClick={() => setActiveNav?.("pump_dump")} className="cw-btn !h-9">
+              <ArrowLeft weight="bold" className="w-4 h-4" /> Open scanner
             </button>
             <button onClick={() => setReloadKey((k) => k + 1)} className="cw-btn !h-9">
               <ArrowsClockwise weight="bold" className="w-4 h-4" /> Reload
@@ -891,36 +917,34 @@ export default function MarketDetail({
         </div>
         <div className="grid gap-3 @3xl:grid-cols-2">
           {[
-            ["LONG", biasModel.long, followSide === "LONG" ? "Follow" : "Counter", TrendUp, "mint"],
-            [
-              "SHORT",
-              biasModel.short,
-              followSide === "SHORT" ? "Follow" : "Counter",
-              TrendDown,
-              "coral",
-            ],
-          ].map(([side, p, kind, Icon, tone]) => {
+            ["LONG", biasModel.long, TrendUp, "mint"],
+            ["SHORT", biasModel.short, TrendDown, "coral"],
+          ].map(([side, p, Icon, tone]) => {
             const fav = confirmedSide === side;
+            const otherConfirmed = confirmedSide && confirmedSide !== side;
             return (
-              <button
+              <div
                 key={side}
-                onClick={() => plan(side)}
-                className={`cw-press relative overflow-hidden h-[72px] rounded-xl border text-center transition-colors duration-150 ${
+                className={`relative overflow-hidden h-[72px] rounded-xl border text-center transition-all duration-200 ${
                   tone === "mint"
                     ? fav
-                      ? "border-mint/50"
-                      : "border-white/[0.08] hover:border-mint/35"
+                      ? "border-mint bg-mint/[0.12] shadow-[0_0_26px_-4px_rgba(126,230,163,0.45)] ring-1 ring-mint/60"
+                      : otherConfirmed
+                        ? "border-white/[0.04] opacity-45"
+                        : "border-white/[0.08]"
                     : fav
-                      ? "border-coral/55"
-                      : "border-white/[0.08] hover:border-coral/35"
+                      ? "border-coral bg-coral/[0.12] shadow-[0_0_26px_-4px_rgba(242,112,124,0.45)] ring-1 ring-coral/60"
+                      : otherConfirmed
+                        ? "border-white/[0.04] opacity-45"
+                        : "border-white/[0.08]"
                 }`}
               >
                 <span
                   className={`absolute inset-y-0 left-0 transition-[width] duration-500 ${
                     fav
                       ? tone === "mint"
-                        ? "bg-mint/[0.16]"
-                        : "bg-coral/[0.18]"
+                        ? "bg-mint/[0.24]"
+                        : "bg-coral/[0.24]"
                       : tone === "mint"
                         ? "bg-mint/[0.05]"
                         : "bg-coral/[0.06]"
@@ -932,13 +956,11 @@ export default function MarketDetail({
                     className={`inline-flex items-center gap-1.5 text-[17px] font-semibold ${tone === "mint" ? "text-mint" : "text-coral"}`}
                   >
                     <Icon weight="bold" className="w-4 h-4" />
-                    {side} BIAS <span className="cw-num">{p.toFixed(1)}%</span>
-                  </span>
-                  <span className="text-[11px] text-fog mt-0.5">
-                    {fav ? `Favored · ${kind}` : kind}
+                    {fav ? `${side} CONFIRMED` : `${side} BIAS`}{" "}
+                    <span className="cw-num">{p.toFixed(1)}%</span>
                   </span>
                 </span>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -973,25 +995,6 @@ export default function MarketDetail({
             </div>
           </div>
         )}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2">
-            <button
-              onClick={() => setActiveNav?.("pump_dump")}
-              className="cw-btn !h-9 !text-[12px]"
-            >
-              Open scanner
-            </button>
-            <button onClick={() => setActiveNav?.("poa")} className="cw-btn !h-9 !text-[12px]">
-              POA dashboard
-            </button>
-          </div>
-          <button
-            onClick={() => setActiveNav?.("poa")}
-            className="text-[12px] text-terminal-yellow hover:underline self-end"
-          >
-            Plan activity
-          </button>
-        </div>
       </section>
 
       {/* Chart */}
@@ -1111,25 +1114,6 @@ export default function MarketDetail({
             </div>
           </div>
         </div>
-      </section>
-
-      <section className="grid grid-cols-2 @5xl:grid-cols-4 gap-3">
-        <StatCard label="Bars" value={bars.length} caption="Visible window rendered" />
-        <StatCard
-          label="Footprint"
-          value={footprint.length}
-          caption={`${trades} trades aggregated`}
-        />
-        <StatCard
-          label="Liquidity levels"
-          value={book.bids.length + book.asks.length}
-          caption={`${Math.max(book.bids.length, book.asks.length)} current levels per side`}
-        />
-        <StatCard
-          label="Overlay"
-          value={hasOverlay ? "POA plan" : "None"}
-          caption={hasOverlay ? "Saved plan for this coin" : "No saved plan overlay"}
-        />
       </section>
     </div>
   );
