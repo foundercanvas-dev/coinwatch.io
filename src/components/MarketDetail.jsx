@@ -27,7 +27,7 @@ import {
 } from "../lib/biasEngine";
 import { adaptiveEmaTrend } from "../lib/trendEngine";
 import { marketStructureLevels } from "../lib/structureEngine";
-import { atrFromCandles, calculateTradePlan } from "../lib/tradeMath";
+import { atrFromCandles, calculateSmartEntry, calculateTradePlan } from "../lib/tradeMath";
 import { rewardRatioFor, TRADE_POLICY } from "../lib/signalPolicy";
 
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
@@ -40,9 +40,20 @@ function numeric(value) {
 
 function signalTradePlan(signal, riskSettings, market = {}) {
   if (!signal) return null;
-  const entry = numeric(signal.entry_price || signal.c || signal.close || signal.price);
-  if (!(entry > 0)) return null;
+  const triggerClose = numeric(signal.entry_price || signal.c || signal.close || signal.price);
+  if (!(triggerClose > 0)) return null;
   const side = signal.direction === "SHORT" || signal.type === "DUMP" ? "SHORT" : "LONG";
+  const atrAbs = market.atrAbs || numeric(signal.atr_abs);
+  const entry = calculateSmartEntry({
+    triggerClose,
+    open: numeric(signal.o || signal.open),
+    high: numeric(signal.h || signal.high),
+    low: numeric(signal.l || signal.low),
+    side,
+    atrAbs,
+    currentPrice: market.currentPrice || triggerClose,
+    entryMode: riskSettings?.entryMode || "retest",
+  });
   const stopLoss =
     numeric(side === "SHORT" ? signal.h || signal.high : signal.l || signal.low) ||
     numeric(signal.stop_loss);
@@ -51,12 +62,13 @@ function signalTradePlan(signal, riskSettings, market = {}) {
     Number(riskSettings?.maxLoss) || Number.POSITIVE_INFINITY,
   );
   const balance = Number(riskSettings?.balance) || 10_000;
+  const rewardRatio = Number(market.rewardRatio ?? riskSettings?.rewardRatio) || 1.5;
   return calculateTradePlan({
     entry,
     side,
     stopLoss,
-    atrAbs: market.atrAbs || numeric(signal.atr_abs),
-    rewardRatio: 1.0,
+    atrAbs,
+    rewardRatio,
     spread: market.spread,
     takerFee: market.takerFee ?? TRADE_POLICY.taker_fee_per_side,
     balance,
@@ -358,7 +370,7 @@ export default function MarketDetail({
       setTradePlan(null);
       return;
     }
-    const planKey = `${signal.id ?? signal.candle_ts ?? signal.raw_ts ?? symbol}:${confirmedSide}:${risk.balance}:${risk.riskPerTrade}:${risk.maxLoss}`;
+    const planKey = `${signal.id ?? signal.candle_ts ?? signal.raw_ts ?? symbol}:${confirmedSide}:${risk.balance}:${risk.riskPerTrade}:${risk.maxLoss}:${risk.rewardRatio ?? 1.5}:${risk.entryMode ?? "retest"}`;
     if (frozenPlanKeyRef.current === planKey) return;
     const confirmationPrice =
       numeric(biasWindow.plan?.entryRef) ||
@@ -386,7 +398,8 @@ export default function MarketDetail({
       risk,
       {
         atrAbs,
-        rewardRatio: 1.0,
+        currentPrice: ticker.last || coin.price,
+        rewardRatio: Number(risk?.rewardRatio) || 1.5,
         spread: liveSpread,
       },
     );
@@ -428,6 +441,7 @@ export default function MarketDetail({
     const levels = [
       ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid, 2],
       ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid, 2],
+      ...(tradePlan.tp1 > 0 ? [["TP", tradePlan.tp1, "#7ee6a3", LineStyle.Dashed, 2]] : []),
     ];
     poaLinesRef.current = levels.map(([title, price, color, lineStyle, lineWidth]) =>
       series.createPriceLine({
@@ -925,41 +939,28 @@ export default function MarketDetail({
             return (
               <div
                 key={side}
-                className={`relative overflow-hidden h-[72px] rounded-xl border text-center transition-all duration-300 ${
-                  tone === "mint"
-                    ? fav
-                      ? "border-mint/45 bg-[#0c1412] shadow-[0_0_24px_-10px_rgba(126,230,163,0.4)]"
-                      : otherConfirmed
-                        ? "border-white/[0.04] bg-[#0b0c0f]/60 opacity-40"
-                        : "border-white/[0.07] bg-[#0b0c0f]"
-                    : fav
-                      ? "border-coral/45 bg-[#140c0e] shadow-[0_0_24px_-10px_rgba(242,112,124,0.4)]"
-                      : otherConfirmed
-                        ? "border-white/[0.04] bg-[#0b0c0f]/60 opacity-40"
-                        : "border-white/[0.07] bg-[#0b0c0f]"
+                className={`relative overflow-hidden h-[72px] rounded-xl text-center transition-all duration-300 ${
+                  fav
+                    ? tone === "mint"
+                      ? "cw-confirmed-long"
+                      : "cw-confirmed-short"
+                    : otherConfirmed
+                      ? "border border-white/[0.04] bg-[#0b0c0f]/60 opacity-40"
+                      : "border border-white/[0.07] bg-[#0b0c0f]"
                 }`}
               >
                 <span
                   className={`absolute inset-y-0 left-0 transition-[width] duration-500 ${
                     fav
                       ? tone === "mint"
-                        ? "bg-gradient-to-r from-mint/[0.16] via-mint/[0.07] to-transparent"
-                        : "bg-gradient-to-r from-coral/[0.16] via-coral/[0.07] to-transparent"
+                        ? "bg-gradient-to-r from-mint/[0.24] via-mint/[0.14] to-mint/[0.05] border-r border-mint/40"
+                        : "bg-gradient-to-r from-coral/[0.24] via-coral/[0.14] to-coral/[0.05] border-r border-coral/40"
                       : tone === "mint"
-                        ? "bg-mint/[0.04]"
-                        : "bg-coral/[0.04]"
+                        ? "bg-mint/[0.07] border-r border-mint/20"
+                        : "bg-coral/[0.07] border-r border-coral/20"
                   }`}
-                  style={{ width: `${fav ? Math.max(p, 100) : p}%` }}
+                  style={{ width: `${p}%` }}
                 />
-                {fav && (
-                  <span
-                    className={`absolute inset-x-0 top-0 h-[2px] ${
-                      tone === "mint"
-                        ? "bg-gradient-to-r from-transparent via-mint/70 to-transparent"
-                        : "bg-gradient-to-r from-transparent via-coral/70 to-transparent"
-                    }`}
-                  />
-                )}
                 <span className="relative flex items-center justify-center gap-2.5 h-full px-4">
                   <span
                     className={`inline-flex items-center gap-1.5 text-[16px] font-semibold tracking-tight ${
@@ -980,7 +981,7 @@ export default function MarketDetail({
             <div className="space-y-0.5">
               <div className="text-[13px] font-medium text-snow">Risk setup required</div>
               <div className="text-[11px] text-fog-2">
-                Set your Balance &amp; Risk % in Settings first to calculate Entry, Stop Loss, and Position Size.
+                Set your Balance &amp; Risk % in Settings first to calculate Entry, Stop Loss, Take Profit, and Position Size.
               </div>
             </div>
             <button
@@ -992,10 +993,11 @@ export default function MarketDetail({
           </div>
         ) : (
           tradePlan && (
-            <div className="grid grid-cols-2 @3xl:grid-cols-4 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
+            <div className="grid grid-cols-2 @3xl:grid-cols-5 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
               {[
                 ["Entry", tradePlan.entry, "accent"],
                 ["Stop loss", tradePlan.stop, "down"],
+                ["Take profit", tradePlan.tp1, "up"],
                 ["Position size", fmtUsd(tradePlan.positionUsd), "default"],
                 ["Max risk", fmtUsd(tradePlan.riskUsd), "muted"],
               ].map(([label, value, tone]) => (

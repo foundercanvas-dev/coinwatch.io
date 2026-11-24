@@ -652,6 +652,52 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
   animation: cw-top-mover-pulse 1.3s ease-in-out infinite;
 }
 
+@property --cw-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes cw-spin-border {
+  to {
+    --cw-angle: 360deg;
+  }
+}
+
+.cw-confirmed-long {
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(#0c1412, #0c1412) padding-box,
+    conic-gradient(
+      from var(--cw-angle),
+      rgb(126 230 163 / 10%) 0deg,
+      rgb(126 230 163 / 90%) 65deg,
+      rgb(126 230 163 / 16%) 145deg,
+      rgb(126 230 163 / 10%) 245deg,
+      rgb(126 230 163 / 75%) 310deg,
+      rgb(126 230 163 / 10%) 360deg
+    ) border-box;
+  animation: cw-spin-border 3.2s linear infinite;
+  box-shadow: 0 0 24px -10px rgb(126 230 163 / 38%);
+}
+
+.cw-confirmed-short {
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(#140c0e, #140c0e) padding-box,
+    conic-gradient(
+      from var(--cw-angle),
+      rgb(242 112 124 / 10%) 0deg,
+      rgb(242 112 124 / 90%) 65deg,
+      rgb(242 112 124 / 16%) 145deg,
+      rgb(242 112 124 / 10%) 245deg,
+      rgb(242 112 124 / 75%) 310deg,
+      rgb(242 112 124 / 10%) 360deg
+    ) border-box;
+  animation: cw-spin-border 3.2s linear infinite;
+  box-shadow: 0 0 24px -10px rgb(242 112 124 / 38%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tab-transition,
   .cw-card-in,
@@ -666,7 +712,9 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
   .cw-vol-extreme-up,
   .cw-vol-extreme-down,
   .cw-sweep,
-  .cw-top-mover-pulse {
+  .cw-top-mover-pulse,
+  .cw-confirmed-long,
+  .cw-confirmed-short {
     animation: none;
   }
 }

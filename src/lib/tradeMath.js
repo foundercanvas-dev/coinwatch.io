@@ -29,12 +29,63 @@ export function atrFromCandles(candles, length = 14) {
   return mean(ranges);
 }
 
+/**
+ * Computes a structured pullback/retest entry price instead of chasing the raw trigger candle close.
+ */
+export function calculateSmartEntry({
+  triggerClose,
+  open,
+  high,
+  low,
+  side,
+  atrAbs = 0,
+  currentPrice = 0,
+  entryMode = "retest",
+}) {
+  const close = Number(triggerClose) || Number(currentPrice);
+  if (!(close > 0)) return 0;
+
+  const isShort = side === "SHORT";
+  const cHigh = Number(high) > 0 ? Number(high) : close;
+  const cLow = Number(low) > 0 ? Number(low) : close;
+  const cOpen = Number(open) > 0 ? Number(open) : close;
+  const candleRange = Math.max(0, cHigh - cLow);
+  const bodySize = Math.abs(close - cOpen);
+  const effectiveRange = Math.max(candleRange, bodySize, Number(atrAbs) || 0);
+
+  if (!(effectiveRange > 0)) return close;
+
+  const retracePct =
+    entryMode === "deep" ? 0.5 : entryMode === "shallow" ? 0.236 : 0.382;
+
+  let retestPrice;
+  if (isShort) {
+    // Bounce back up into the dump candle structure before continuation
+    retestPrice = close + effectiveRange * retracePct;
+    const ceiling = cHigh - candleRange * 0.12;
+    if (cHigh > close && retestPrice > ceiling) retestPrice = ceiling;
+    if (currentPrice > close && currentPrice < cHigh) {
+      retestPrice = Math.max(retestPrice, currentPrice);
+    }
+  } else {
+    // Pullback into the pump candle structure instead of buying the top wick
+    retestPrice = close - effectiveRange * retracePct;
+    const floor = cLow + candleRange * 0.12;
+    if (cLow < close && retestPrice < floor) retestPrice = floor;
+    if (currentPrice > cLow && currentPrice < close) {
+      retestPrice = Math.min(retestPrice, currentPrice);
+    }
+  }
+
+  return Number(retestPrice.toPrecision(6));
+}
+
 export function calculateTradePlan({
   entry,
   side,
   atrAbs,
   stopLoss,
-  rewardRatio = 1,
+  rewardRatio = 1.5,
   spread = 0,
   takerFee = TRADE_POLICY.taker_fee_per_side,
   balance = 10_000,

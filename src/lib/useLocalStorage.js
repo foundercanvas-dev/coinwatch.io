@@ -23,7 +23,7 @@ export default function useLocalStorage(key, initialValue) {
 }
 
 export const RISK_PROFILES = {
-  easy: { label: 'Easy', riskPerTrade: 0.5, maxLoss: 6 },
-  balanced: { label: 'Balanced', riskPerTrade: 1, maxLoss: 10 },
-  aggressive: { label: 'Aggressive', riskPerTrade: 2, maxLoss: 20 },
+  easy: { label: 'Easy', riskPerTrade: 0.5, maxLoss: 6, rewardRatio: 1.5, entryMode: 'retest' },
+  balanced: { label: 'Balanced', riskPerTrade: 1, maxLoss: 10, rewardRatio: 2, entryMode: 'retest' },
+  aggressive: { label: 'Aggressive', riskPerTrade: 2, maxLoss: 20, rewardRatio: 2.5, entryMode: 'shallow' },
 };

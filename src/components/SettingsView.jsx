@@ -297,6 +297,47 @@ export default function SettingsView({
               />
             </Field>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Entry placement"
+              hint="Places limit entry at a pullback/retest zone instead of chasing the trigger candle."
+            >
+              <Segmented
+                value={riskDraft.entryMode || "retest"}
+                onChange={(value) =>
+                  setRiskDraft((current) => ({
+                    ...current,
+                    entryMode: value,
+                  }))
+                }
+                options={[
+                  { value: "shallow", label: "Shallow 24%" },
+                  { value: "retest", label: "Retest 38%" },
+                  { value: "deep", label: "Deep 50%" },
+                ]}
+              />
+            </Field>
+            <Field
+              label="Take profit (R:R)"
+              hint="TP target calculated automatically from your Entry and Stop Loss distance."
+            >
+              <Segmented
+                value={String(riskDraft.rewardRatio ?? 1.5)}
+                onChange={(value) =>
+                  setRiskDraft((current) => ({
+                    ...current,
+                    rewardRatio: Number(value),
+                  }))
+                }
+                options={[
+                  { value: "1", label: "1:1" },
+                  { value: "1.5", label: "1:1.5" },
+                  { value: "2", label: "1:2" },
+                  { value: "3", label: "1:3" },
+                ]}
+              />
+            </Field>
+          </div>
         </div>
       </Section>
 
