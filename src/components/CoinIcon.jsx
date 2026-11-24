@@ -23,6 +23,8 @@ export default function CoinIcon({ symbol, className = "w-10 h-10", isPump = tru
   const lower = base.toLowerCase();
   const sources = [
     `https://app.hyperliquid.xyz/coins/${base}.svg`,
+    `https://static.okx.com/cdn/oksupport/asset/currency/icon/${lower}.png`,
+    `https://cryptoicon-api.pages.dev/api/icon/${lower}`,
     `https://assets.coincap.io/assets/icons/${lower}@2x.png`,
     `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${lower}.png`,
   ];
@@ -35,13 +37,13 @@ export default function CoinIcon({ symbol, className = "w-10 h-10", isPump = tru
     <span className={`relative inline-flex shrink-0 ${className}`}>
       {failed ? (
         <span
-          className={`w-full h-full rounded-full flex items-center justify-center font-semibold text-[11px] border ${
+          className={`w-full h-full rounded-full flex items-center justify-center font-bold tracking-tight text-[10px] border ${
             isPump
               ? "bg-mint/10 border-mint/25 text-mint"
               : "bg-coral/10 border-coral/25 text-coral"
           }`}
         >
-          {base.slice(0, 1)}
+          {base.slice(0, 3)}
         </span>
       ) : (
         <img

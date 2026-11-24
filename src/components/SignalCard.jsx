@@ -5,6 +5,28 @@ import MoverFX from "./MoverFX";
 import { Metric, FlashValue } from "./ui";
 import { exchangeName } from "./ExchangeLogo";
 
+function parseVolumeUsd(signal) {
+  if (Number.isFinite(Number(signal.volume_usd)) && Number(signal.volume_usd) > 0) {
+    return Number(signal.volume_usd);
+  }
+  const raw = String(signal.volume || "").toUpperCase();
+  const num = parseFloat(raw.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(num)) return 0;
+  if (raw.includes("B")) return num * 1e9;
+  if (raw.includes("M")) return num * 1e6;
+  if (raw.includes("K")) return num * 1e3;
+  return num;
+}
+
+function getVolumeTier(signal) {
+  const volUsd = parseVolumeUsd(signal);
+  const spike = Number(signal.vol_spike || 0);
+  if (volUsd >= 250_000 || spike >= 5) return 3; // Extreme whale volume
+  if (volUsd >= 50_000 || spike >= 2.5) return 2; // High volume flash
+  if (volUsd >= 10_000 || spike >= 1.5) return 1; // Moderate volume pulse
+  return 0; // Slow / low volume -> no extra animation
+}
+
 export default function SignalCard({
   signal,
   view = "live",
@@ -21,6 +43,21 @@ export default function SignalCard({
   const base = baseAsset(signal.symbol || signal.pair);
   const change = Number(signal.change_pct || 0);
   const DirIcon = isPump ? TrendUp : TrendDown;
+  const volTier = view === "live" ? getVolumeTier(signal) : 0;
+  const volAnimClass =
+    volTier === 3
+      ? isPump
+        ? "cw-vol-extreme-up"
+        : "cw-vol-extreme-down"
+      : volTier === 2
+        ? isPump
+          ? "cw-vol-high-up"
+          : "cw-vol-high-down"
+        : volTier === 1
+          ? isPump
+            ? "cw-vol-mid-up"
+            : "cw-vol-mid-down"
+          : "";
   const lifecycleLabel = {
     confirming: "Confirming",
     confirmed: "Confirmed",
@@ -51,11 +88,25 @@ export default function SignalCard({
       role="button"
       aria-label={`${base} ${isPump ? "pump" : "dump"} ${change}% on ${exchangeName(signal.exchange)}`}
       style={{ animationDelay: `${Math.min(index, 10) * 25}ms` }}
-      className={`cw-card cw-card-sm cw-card-in cw-press group p-4 cursor-pointer ${
-        hot ? "cw-glow !border-white/[0.1]" : selected ? "!border-mint/35" : "cw-hover"
+      className={`cw-card cw-card-sm cw-card-in cw-press relative overflow-hidden group p-4 cursor-pointer ${volAnimClass} ${
+        hot ? "cw-glow !border-white/[0.18]" : selected ? "!border-mint/35" : "cw-hover"
       }`}
     >
-      {false && <MoverFX direction={isPump ? "up" : "down"} />}
+      {(hot || volTier >= 3) && (
+        <MoverFX direction={isPump ? "up" : "down"} intensity={volTier >= 3 ? 1.35 : 0.9} />
+      )}
+      {volTier >= 2 && (
+        <span
+          aria-hidden="true"
+          className={`cw-sweep pointer-events-none absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent ${
+            volTier >= 3
+              ? "via-yellow-300/[0.14]"
+              : isPump
+                ? "via-mint/[0.12]"
+                : "via-coral/[0.12]"
+          } to-transparent`}
+        />
+      )}
 
       <div className="relative">
         <div className="flex items-start gap-3">
@@ -109,7 +160,7 @@ export default function SignalCard({
                 </span>
               )}
               {hot && (
-                <span className="shrink-0 inline-flex items-center gap-1 px-1.5 rounded-full bg-white/[0.06] text-snow/90 whitespace-nowrap">
+                <span className="cw-top-mover-pulse shrink-0 inline-flex items-center gap-1 px-1.5 rounded-full bg-white/[0.08] border border-white/[0.12] text-snow whitespace-nowrap">
                   <Fire
                     weight="fill"
                     className={`w-3 h-3 ${isPump ? "text-mint" : "text-coral"}`}
