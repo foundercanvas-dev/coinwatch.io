@@ -953,11 +953,11 @@ export default function MarketDetail({
                   className={`absolute inset-y-0 left-0 transition-[width] duration-500 ${
                     fav
                       ? tone === "mint"
-                        ? "bg-gradient-to-r from-mint/[0.24] via-mint/[0.14] to-mint/[0.05] border-r border-mint/40"
-                        : "bg-gradient-to-r from-coral/[0.24] via-coral/[0.14] to-coral/[0.05] border-r border-coral/40"
+                        ? "bg-gradient-to-r from-mint/[0.24] via-mint/[0.14] to-mint/[0.04]"
+                        : "bg-gradient-to-r from-coral/[0.24] via-coral/[0.14] to-coral/[0.04]"
                       : tone === "mint"
-                        ? "bg-mint/[0.07] border-r border-mint/20"
-                        : "bg-coral/[0.07] border-r border-coral/20"
+                        ? "bg-mint/[0.07]"
+                        : "bg-coral/[0.07]"
                   }`}
                   style={{ width: `${p}%` }}
                 />

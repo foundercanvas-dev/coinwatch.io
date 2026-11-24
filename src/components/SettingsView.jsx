@@ -311,9 +311,9 @@ export default function SettingsView({
                   }))
                 }
                 options={[
-                  { value: "shallow", label: "Shallow 24%" },
-                  { value: "retest", label: "Retest 38%" },
-                  { value: "deep", label: "Deep 50%" },
+                  { value: "shallow", label: "Tight 12%" },
+                  { value: "retest", label: "Retest 22%" },
+                  { value: "deep", label: "Deep 32%" },
                 ]}
               />
             </Field>

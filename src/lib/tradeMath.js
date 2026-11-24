@@ -51,28 +51,28 @@ export function calculateSmartEntry({
   const cOpen = Number(open) > 0 ? Number(open) : close;
   const candleRange = Math.max(0, cHigh - cLow);
   const bodySize = Math.abs(close - cOpen);
-  const effectiveRange = Math.max(candleRange, bodySize, Number(atrAbs) || 0);
+  const effectiveRange = candleRange > 0 ? candleRange : Math.max(bodySize, Number(atrAbs) || 0);
 
   if (!(effectiveRange > 0)) return close;
 
   const retracePct =
-    entryMode === "deep" ? 0.5 : entryMode === "shallow" ? 0.236 : 0.382;
+    entryMode === "deep" ? 0.32 : entryMode === "shallow" ? 0.12 : 0.22;
 
   let retestPrice;
   if (isShort) {
-    // Bounce back up into the dump candle structure before continuation
+    // Tight bounce into the dump candle structure before continuation
     retestPrice = close + effectiveRange * retracePct;
-    const ceiling = cHigh - candleRange * 0.12;
+    const ceiling = cHigh - candleRange * 0.25;
     if (cHigh > close && retestPrice > ceiling) retestPrice = ceiling;
-    if (currentPrice > close && currentPrice < cHigh) {
+    if (currentPrice > close && currentPrice < ceiling) {
       retestPrice = Math.max(retestPrice, currentPrice);
     }
   } else {
-    // Pullback into the pump candle structure instead of buying the top wick
+    // Tight pullback into the pump candle structure instead of buying the top wick
     retestPrice = close - effectiveRange * retracePct;
-    const floor = cLow + candleRange * 0.12;
+    const floor = cLow + candleRange * 0.25;
     if (cLow < close && retestPrice < floor) retestPrice = floor;
-    if (currentPrice > cLow && currentPrice < close) {
+    if (currentPrice > floor && currentPrice < close) {
       retestPrice = Math.min(retestPrice, currentPrice);
     }
   }
