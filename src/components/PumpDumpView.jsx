@@ -177,14 +177,14 @@ export default function PumpDumpView({
         eyebrow="Live scanner"
         eyebrowIcon={ChartLineUp}
         title="Pump / Dump"
-        description="Choose a timeframe to match your trade: lower timeframes surface quick in-and-out setups, while higher timeframes use wider targets and progressively higher reward-to-risk."
+        description="Quick 1M scalp scanner: surfaces rapid momentum moves across live perpetual markets with 1:1 targets and trigger-candle invalidation."
         actions={<LivePill isConnected={isConnected} label={sourceLabel} />}
       />
 
       {/* Controls */}
-      <section className="cw-panel cw-glow p-4 md:p-5 space-y-4">
-        <div className="grid gap-4 @4xl:grid-cols-[180px_90px_1fr] items-center">
-          <div className="text-[14px] font-medium text-snow">Sensitivity</div>
+      <section className="cw-panel cw-glow p-4 md:p-5">
+        <div className="grid gap-4 @4xl:grid-cols-[180px_90px_1fr] items-start">
+          <div className="text-[14px] font-medium text-snow pt-1">Sensitivity</div>
           <div className="cw-num text-[26px] font-semibold text-mint @4xl:text-right">
             {sensitivity.toFixed(1)}%
           </div>
@@ -199,12 +199,12 @@ export default function PumpDumpView({
               className="w-full h-1 cursor-pointer"
               aria-label="Sensitivity threshold"
             />
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1">
               {presets.map((v) => (
                 <button
                   key={v}
                   onClick={() => setSensitivity(v)}
-                  className={`cw-num h-7 px-2.5 rounded-full border text-[11px] transition-colors ${
+                  className={`cw-num h-6 px-2 rounded-full border text-[11px] transition-colors ${
                     sensitivity === v
                       ? "border-mint/45 bg-mint/10 text-mint"
                       : "border-white/[0.08] text-fog hover:text-snow hover:border-white/20"
@@ -214,26 +214,6 @@ export default function PumpDumpView({
                 </button>
               ))}
             </div>
-          </div>
-        </div>
-        <div className="h-px bg-white/[0.05]" />
-        <div className="grid gap-3 @4xl:grid-cols-[270px_1fr] items-center">
-          <div className="text-[14px] font-medium text-snow">Timeframe</div>
-          <div className="flex flex-wrap gap-1.5">
-            {TIMEFRAMES.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => selectTimeframe(t.id)}
-                className={`h-7 px-3 rounded-full border text-[11px] transition-colors inline-flex items-center gap-1.5 ${
-                  timeframe === t.id
-                    ? "border-mint/45 bg-mint/10 text-mint"
-                    : "border-white/[0.08] text-fog hover:text-snow hover:border-white/20"
-                }`}
-              >
-                <span className="cw-num font-medium">{t.label}</span>
-                <span className="opacity-70">{t.title}</span>
-              </button>
-            ))}
           </div>
         </div>
       </section>
