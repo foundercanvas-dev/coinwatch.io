@@ -14,7 +14,7 @@ import {
   Pulse,
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
-import { PageHeader, LivePill, Segmented, StatCard, FlashValue } from "./ui";
+import { PageHeader, LivePill, Segmented, StatCard } from "./ui";
 import { fmtPrice, fmtUsd, pct, fmtTime } from "../lib/format";
 import {
   analyzeDomHeatmap,
@@ -145,9 +145,14 @@ export default function OrderFlowView({ risk, onSelectCoin, soundEnabled }) {
       priceScaleId: "right",
     });
 
-    // Sync time scales
+    // Sync time scales safely
     mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-      if (range) cvdChart.timeScale().setVisibleLogicalRange(range);
+      if (!range || !candlesRef.current.length) return;
+      try {
+        cvdChart.timeScale().setVisibleLogicalRange(range);
+      } catch {
+        /* ignore before cvd series has data */
+      }
     });
 
     mainChartRef.current = mainChart;
@@ -404,19 +409,39 @@ export default function OrderFlowView({ risk, onSelectCoin, soundEnabled }) {
     if (!candleSeriesRef.current || !deltaSeriesRef.current || !cvdSeriesRef.current) return;
     if (!candles.length) return;
 
-    candleSeriesRef.current.setData(candles);
-    deltaSeriesRef.current.setData(deltaCvd.series);
-    cvdSeriesRef.current.setData(deltaCvd.cvdSeries);
+    // Ensure strictly ascending unique timestamps for lightweight-charts
+    const seenTime = new Set();
+    const cleanCandles = [];
+    for (const c of [...candles].sort((a, b) => a.time - b.time)) {
+      if (!Number.isFinite(c.time) || seenTime.has(c.time)) continue;
+      seenTime.add(c.time);
+      cleanCandles.push(c);
+    }
+    if (!cleanCandles.length) return;
 
-    // Markers for Heavy Absorption
-    const markers = absorptions.map((sig) => ({
-      time: sig.time,
-      position: sig.side === "LONG" ? "belowBar" : "aboveBar",
-      color: sig.side === "LONG" ? "#7ee6a3" : "#f2707c",
-      shape: "circle",
-      text: sig.label,
-    }));
-    candleSeriesRef.current.setMarkers(markers);
+    const cleanDelta = deltaCvd.series.filter((d) => seenTime.has(d.time));
+    const cleanCvd = deltaCvd.cvdSeries.filter((d) => seenTime.has(d.time));
+
+    try {
+      candleSeriesRef.current.setData(cleanCandles);
+      deltaSeriesRef.current.setData(cleanDelta);
+      cvdSeriesRef.current.setData(cleanCvd);
+
+      // Markers for Heavy Absorption (sorted ascending by time)
+      const markers = [...absorptions]
+        .filter((sig) => seenTime.has(sig.time))
+        .sort((a, b) => a.time - b.time)
+        .map((sig) => ({
+          time: sig.time,
+          position: sig.side === "LONG" ? "belowBar" : "aboveBar",
+          color: sig.side === "LONG" ? "#7ee6a3" : "#f2707c",
+          shape: "circle",
+          text: sig.label,
+        }));
+      candleSeriesRef.current.setMarkers(markers);
+    } catch {
+      /* ignore transient chart sync errors */
+    }
 
     // Price lines: POC, VAH, VAL, Top 3 HVN levels, and active signal Entry/SL/TP
     for (const line of priceLinesRef.current) {
@@ -428,18 +453,22 @@ export default function OrderFlowView({ risk, onSelectCoin, soundEnabled }) {
     }
     const nextLines = [];
     const addLine = (price, title, color, style = LineStyle.Solid, width = 1) => {
-      if (!(price > 0)) return;
-      nextLines.push(
-        candleSeriesRef.current.createPriceLine({
-          price,
-          title,
-          color,
-          lineStyle: style,
-          lineWidth: width,
-          lineVisible: true,
-          axisLabelVisible: true,
-        }),
-      );
+      if (!(price > 0) || !Number.isFinite(price)) return;
+      try {
+        nextLines.push(
+          candleSeriesRef.current.createPriceLine({
+            price,
+            title,
+            color,
+            lineStyle: style,
+            lineWidth: width,
+            lineVisible: true,
+            axisLabelVisible: true,
+          }),
+        );
+      } catch {
+        /* ignore chart line errors */
+      }
     };
 
     if (hvnProfile.poc) {
@@ -553,38 +582,27 @@ export default function OrderFlowView({ risk, onSelectCoin, soundEnabled }) {
       <div className="grid grid-cols-2 @3xl:grid-cols-3 @5xl:grid-cols-6 gap-3">
         <StatCard
           label={`${baseCoin}/USDT`}
-          value={<FlashValue value={fmtPrice(ticker.price)} className="text-snow" />}
-          sub={
-            <span className={ticker.change24 >= 0 ? "text-mint" : "text-coral"}>
-              {pct(ticker.change24)} (24h)
-            </span>
-          }
-          accent={ticker.change24 >= 0 ? "mint" : "coral"}
+          value={fmtPrice(ticker.price)}
+          caption={`${pct(ticker.change24)} (24h)`}
+          tone={ticker.change24 >= 0 ? "up" : "down"}
+          highlight
         />
         <StatCard
           label="Candle Delta"
-          value={
-            <span className={latestDelta >= 0 ? "text-mint" : "text-coral"}>
-              {latestDelta >= 0 ? "+" : ""}
-              {latestDelta.toFixed(1)}
-            </span>
-          }
-          sub={latestDelta >= 0 ? "Buyers aggressive" : "Sellers aggressive"}
+          value={`${latestDelta >= 0 ? "+" : ""}${latestDelta.toFixed(1)}`}
+          caption={latestDelta >= 0 ? "Buyers aggressive" : "Sellers aggressive"}
+          tone={latestDelta >= 0 ? "up" : "down"}
         />
         <StatCard
           label="Session CVD"
-          value={
-            <span className={latestCvd >= 0 ? "text-mint" : "text-coral"}>
-              {latestCvd >= 0 ? "+" : ""}
-              {latestCvd.toFixed(0)}
-            </span>
-          }
-          sub={deltaCvd.divergence ? deltaCvd.divergence.label : "No divergence"}
+          value={`${latestCvd >= 0 ? "+" : ""}${latestCvd.toFixed(0)}`}
+          caption={deltaCvd.divergence ? deltaCvd.divergence.label : "No divergence"}
+          tone={latestCvd >= 0 ? "up" : "down"}
         />
         <StatCard
           label="POC / Value Area"
           value={hvnProfile.poc ? fmtPrice(hvnProfile.poc.price) : "—"}
-          sub={
+          caption={
             hvnProfile.vah && hvnProfile.val
               ? `${fmtPrice(hvnProfile.val)} – ${fmtPrice(hvnProfile.vah)}`
               : "Calculating"
@@ -593,13 +611,13 @@ export default function OrderFlowView({ risk, onSelectCoin, soundEnabled }) {
         <StatCard
           label="Funding / OI"
           value={ticker.fundingRate != null ? `${ticker.fundingRate.toFixed(4)}%` : "—"}
-          sub={ticker.openInterest ? `OI: ${Number(ticker.openInterest).toLocaleString()} ${baseCoin}` : "—"}
+          caption={ticker.openInterest ? `OI: ${Number(ticker.openInterest).toLocaleString()} ${baseCoin}` : "—"}
         />
         <StatCard
           label="Active Signals"
           value={orderFlowSignals.length}
-          sub={`${dom.buyWalls.length} Buy / ${dom.sellWalls.length} Sell Walls`}
-          accent="mint"
+          caption={`${dom.buyWalls.length} Buy / ${dom.sellWalls.length} Sell Walls`}
+          tone="up"
         />
       </div>
 
