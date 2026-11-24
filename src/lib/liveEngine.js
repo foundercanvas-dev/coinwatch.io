@@ -330,11 +330,6 @@ class LiveEngine {
           signal.finalized_ts = now;
           signal.updated_ts = now;
           signal.outcome = "Stop loss reached";
-        } else if ((isLong && m.price >= signal.tp1) || (!isLong && m.price <= signal.tp1)) {
-          signal.lifecycle_status = "target_hit";
-          signal.finalized_ts = now;
-          signal.updated_ts = now;
-          signal.outcome = "TP1 reached";
         } else if (signal.expires_ts && now >= signal.expires_ts) {
           signal.lifecycle_status = "expired";
           signal.finalized_ts = now;
@@ -436,8 +431,8 @@ class LiveEngine {
         rr_ratio: `1:${rr}R`,
         entry_price: candidate.close,
         stop_loss: +slPrice.toPrecision(6),
-        tp1: +(isPump ? candidate.close + risk * rr : candidate.close - risk * rr).toPrecision(6),
-        tp2: +(isPump ? candidate.close + risk * rr : candidate.close - risk * rr).toPrecision(6),
+        tp1: null,
+        tp2: null,
         candle_ts: candidate.openTime,
         candle_at: fmtDateTime(candidate.openTime),
         first_ts: prev ? prev.first_ts : now,
@@ -683,8 +678,8 @@ class LiveEngine {
         rr_ratio: `1:${rr}R`,
         entry_price: candle.close,
         stop_loss: +slPrice.toPrecision(6),
-        tp1: +(isPump ? candle.close + risk * rr : candle.close - risk * rr).toPrecision(6),
-        tp2: +(isPump ? candle.close + risk * rr : candle.close - risk * rr).toPrecision(6),
+        tp1: null,
+        tp2: null,
         candle_ts: candle.openTime,
         candle_at: fmtDateTime(candle.openTime),
         first_ts: candle.openTime,

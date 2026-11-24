@@ -428,7 +428,6 @@ export default function MarketDetail({
     const levels = [
       ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid, 2],
       ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid, 2],
-      ["TP (1:1)", tradePlan.tp1, "#7ee6a3", LineStyle.Dashed, 2],
     ];
     poaLinesRef.current = levels.map(([title, price, color, lineStyle, lineWidth]) =>
       series.createPriceLine({
@@ -945,11 +944,10 @@ export default function MarketDetail({
         </div>
         {tradePlan && (
           <div className="space-y-2">
-            <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
+            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
               {[
                 ["Entry", tradePlan.entry, "accent"],
                 ["Stop loss", tradePlan.stop, "down"],
-                ["Take profit (1:1)", tradePlan.tp1, "up"],
               ].map(([label, value, tone]) => (
                 <div key={label} className="bg-[#0b0c0f] px-3 py-2.5">
                   <Metric
