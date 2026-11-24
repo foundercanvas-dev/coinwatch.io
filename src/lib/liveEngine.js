@@ -458,13 +458,35 @@ class LiveEngine {
 
   view(sensitivity, tf) {
     this.evaluate();
-    const live = [];
-    const history = [];
+    const liveByCoin = new Map();
+    const historyByCoinCandle = new Map();
+    const rankSignal = (s) =>
+      (s.lifecycle_status === "confirmed" ? 1e9 : 0) +
+      Number(s.score || 0) * 1e5 +
+      Math.log10(Math.max(1, Number(s.volume_usd || s.turnover_24h_usd || 1))) * 1e3 +
+      Math.abs(Number(s.change_pct || 0));
+
     for (const s of this.signals[tf].values()) {
       if (Math.abs(s.change_pct) < sensitivity && Math.abs(s.peak_pct) < sensitivity) continue;
       const isLive = ["confirming", "confirmed"].includes(s.lifecycle_status);
-      (isLive ? live : history).push(s);
+      const coinKey = String(s.coin || s.symbol || "")
+        .toUpperCase()
+        .replace(/(USDT|USDC|PERP)$/i, "");
+      if (isLive) {
+        const existing = liveByCoin.get(coinKey);
+        if (!existing || rankSignal(s) > rankSignal(existing)) {
+          liveByCoin.set(coinKey, s);
+        }
+      } else {
+        const histKey = `${coinKey}:${s.candle_ts || s.id}`;
+        const existing = historyByCoinCandle.get(histKey);
+        if (!existing || rankSignal(s) > rankSignal(existing)) {
+          historyByCoinCandle.set(histKey, s);
+        }
+      }
     }
+    const live = [...liveByCoin.values()];
+    const history = [...historyByCoinCandle.values()];
     live.sort((a, b) => b.updated_ts - a.updated_ts);
     history.sort((a, b) => b.updated_ts - a.updated_ts);
     const monitored = this.markets.size;
