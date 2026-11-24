@@ -353,12 +353,12 @@ export default function MarketDetail({
   }, [exchange, symbol, interval, reloadKey, coin.coin]);
 
   useEffect(() => {
-    if (!signal || !confirmedSide) {
+    if (!signal || !confirmedSide || !risk?.configured) {
       frozenPlanKeyRef.current = null;
       setTradePlan(null);
       return;
     }
-    const planKey = `${signal.id ?? signal.candle_ts ?? signal.raw_ts ?? symbol}:${confirmedSide}`;
+    const planKey = `${signal.id ?? signal.candle_ts ?? signal.raw_ts ?? symbol}:${confirmedSide}:${risk.balance}:${risk.riskPerTrade}:${risk.maxLoss}`;
     if (frozenPlanKeyRef.current === planKey) return;
     const confirmationPrice =
       numeric(biasWindow.plan?.entryRef) ||
@@ -925,51 +925,79 @@ export default function MarketDetail({
             return (
               <div
                 key={side}
-                className={`relative overflow-hidden h-[72px] rounded-xl border text-center transition-all duration-200 ${
+                className={`relative overflow-hidden h-[72px] rounded-xl border text-center transition-all duration-300 ${
                   tone === "mint"
                     ? fav
-                      ? "border-mint bg-mint/[0.12] shadow-[0_0_26px_-4px_rgba(126,230,163,0.45)] ring-1 ring-mint/60"
+                      ? "border-mint/45 bg-[#0c1412] shadow-[0_0_24px_-10px_rgba(126,230,163,0.4)]"
                       : otherConfirmed
-                        ? "border-white/[0.04] opacity-45"
-                        : "border-white/[0.08]"
+                        ? "border-white/[0.04] bg-[#0b0c0f]/60 opacity-40"
+                        : "border-white/[0.07] bg-[#0b0c0f]"
                     : fav
-                      ? "border-coral bg-coral/[0.12] shadow-[0_0_26px_-4px_rgba(242,112,124,0.45)] ring-1 ring-coral/60"
+                      ? "border-coral/45 bg-[#140c0e] shadow-[0_0_24px_-10px_rgba(242,112,124,0.4)]"
                       : otherConfirmed
-                        ? "border-white/[0.04] opacity-45"
-                        : "border-white/[0.08]"
+                        ? "border-white/[0.04] bg-[#0b0c0f]/60 opacity-40"
+                        : "border-white/[0.07] bg-[#0b0c0f]"
                 }`}
               >
                 <span
                   className={`absolute inset-y-0 left-0 transition-[width] duration-500 ${
                     fav
                       ? tone === "mint"
-                        ? "bg-mint/[0.24]"
-                        : "bg-coral/[0.24]"
+                        ? "bg-gradient-to-r from-mint/[0.16] via-mint/[0.07] to-transparent"
+                        : "bg-gradient-to-r from-coral/[0.16] via-coral/[0.07] to-transparent"
                       : tone === "mint"
-                        ? "bg-mint/[0.05]"
-                        : "bg-coral/[0.06]"
+                        ? "bg-mint/[0.04]"
+                        : "bg-coral/[0.04]"
                   }`}
-                  style={{ width: `${p}%` }}
+                  style={{ width: `${fav ? Math.max(p, 100) : p}%` }}
                 />
-                <span className="relative flex flex-col items-center justify-center h-full">
+                {fav && (
                   <span
-                    className={`inline-flex items-center gap-1.5 text-[17px] font-semibold ${tone === "mint" ? "text-mint" : "text-coral"}`}
+                    className={`absolute inset-x-0 top-0 h-[2px] ${
+                      tone === "mint"
+                        ? "bg-gradient-to-r from-transparent via-mint/70 to-transparent"
+                        : "bg-gradient-to-r from-transparent via-coral/70 to-transparent"
+                    }`}
+                  />
+                )}
+                <span className="relative flex items-center justify-center gap-2.5 h-full px-4">
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-[16px] font-semibold tracking-tight ${
+                      tone === "mint" ? "text-mint" : "text-coral"
+                    }`}
                   >
                     <Icon weight="bold" className="w-4 h-4" />
-                    {fav ? `${side} CONFIRMED` : `${side} BIAS`}{" "}
-                    <span className="cw-num">{p.toFixed(1)}%</span>
+                    {fav ? `${side} CONFIRMED` : `${side} BIAS`}
+                    <span className="cw-num opacity-90">{p.toFixed(1)}%</span>
                   </span>
                 </span>
               </div>
             );
           })}
         </div>
-        {tradePlan && (
-          <div className="space-y-2">
-            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
+        {!risk?.configured ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#0b0c0f] px-4 py-3">
+            <div className="space-y-0.5">
+              <div className="text-[13px] font-medium text-snow">Risk setup required</div>
+              <div className="text-[11px] text-fog-2">
+                Set your Balance &amp; Risk % in Settings first to calculate Entry, Stop Loss, and Position Size.
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveNav?.("settings")}
+              className="cw-btn cw-btn-primary !h-8 !px-3.5 !text-[12px] shrink-0"
+            >
+              <ShieldCheck weight="duotone" className="w-4 h-4" /> Setup Risk
+            </button>
+          </div>
+        ) : (
+          tradePlan && (
+            <div className="grid grid-cols-2 @3xl:grid-cols-4 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
               {[
                 ["Entry", tradePlan.entry, "accent"],
                 ["Stop loss", tradePlan.stop, "down"],
+                ["Position size", fmtUsd(tradePlan.positionUsd), "default"],
+                ["Max risk", fmtUsd(tradePlan.riskUsd), "muted"],
               ].map(([label, value, tone]) => (
                 <div key={label} className="bg-[#0b0c0f] px-3 py-2.5">
                   <Metric
@@ -980,20 +1008,7 @@ export default function MarketDetail({
                 </div>
               ))}
             </div>
-            <div
-              className={`cw-num flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border px-3 py-2 text-[10px] ${
-                tradePlan.flagged
-                  ? "border-terminal-yellow/25 bg-terminal-yellow/[0.05] text-terminal-yellow"
-                  : "border-mint/20 bg-mint/[0.04] text-fog"
-              }`}
-            >
-              <span>Gross 1:{tradePlan.rewardRatio.toFixed(1)}R</span>
-              <span>Net {tradePlan.netRR.toFixed(2)}R</span>
-              <span>B/E {(tradePlan.breakevenWinRate * 100).toFixed(1)}%</span>
-              <span>Costs {(tradePlan.cost * 100).toFixed(3)}%</span>
-              {tradePlan.flagged && <span>Trade quality gate failed</span>}
-            </div>
-          </div>
+          )
         )}
       </section>
 
