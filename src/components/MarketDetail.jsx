@@ -42,6 +42,10 @@ function signalTradePlan(signal, riskSettings, market = {}) {
   if (!signal) return null;
   const entry = numeric(signal.entry_price || signal.c || signal.close || signal.price);
   if (!(entry > 0)) return null;
+  const side = signal.direction === "SHORT" || signal.type === "DUMP" ? "SHORT" : "LONG";
+  const stopLoss =
+    numeric(side === "SHORT" ? signal.h || signal.high : signal.l || signal.low) ||
+    numeric(signal.stop_loss);
   const riskPct = Math.min(
     Number(riskSettings?.riskPerTrade) || 1,
     Number(riskSettings?.maxLoss) || Number.POSITIVE_INFINITY,
@@ -49,12 +53,10 @@ function signalTradePlan(signal, riskSettings, market = {}) {
   const balance = Number(riskSettings?.balance) || 10_000;
   return calculateTradePlan({
     entry,
-    side: signal.direction === "SHORT" || signal.type === "DUMP" ? "SHORT" : "LONG",
+    side,
+    stopLoss,
     atrAbs: market.atrAbs || numeric(signal.atr_abs),
-    rewardRatio:
-      numeric(signal.reward_ratio || signal.trigger_reward_ratio) ||
-      market.rewardRatio ||
-      rewardRatioFor(signal.timeframe),
+    rewardRatio: 1.0,
     spread: market.spread,
     takerFee: market.takerFee ?? TRADE_POLICY.taker_fee_per_side,
     balance,
@@ -365,7 +367,10 @@ export default function MarketDetail({
       coin.price;
     const planCandles = signal.timeframe === "1m" ? biasBars : bars;
     const atrAbs = numeric(signal.atr_abs) || atrFromCandles(planCandles);
-    if (!(atrAbs > 0)) return;
+    const stopLoss =
+      numeric(confirmedSide === "SHORT" ? signal.h || signal.high : signal.l || signal.low) ||
+      numeric(signal.stop_loss);
+    if (!(atrAbs > 0) && !(stopLoss > 0)) return;
     const liveSpread = bookImbalance(book).spread;
     if (!Number.isFinite(liveSpread)) return;
     const frozenPlan = signalTradePlan(
@@ -381,7 +386,7 @@ export default function MarketDetail({
       risk,
       {
         atrAbs,
-        rewardRatio,
+        rewardRatio: 1.0,
         spread: liveSpread,
       },
     );
@@ -422,10 +427,8 @@ export default function MarketDetail({
 
     const levels = [
       ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid, 2],
-      ["DCA ZONE A", tradePlan.dcaZoneLow, "#e6c97a", LineStyle.Dashed, 1],
-      ["DCA ZONE B", tradePlan.dcaZoneHigh, "#e6c97a", LineStyle.Dashed, 1],
       ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid, 2],
-      ["TP", tradePlan.tp1, "#7ee6a3", LineStyle.Dashed, 2],
+      ["TP (1:1)", tradePlan.tp1, "#7ee6a3", LineStyle.Dashed, 2],
     ];
     poaLinesRef.current = levels.map(([title, price, color, lineStyle, lineWidth]) =>
       series.createPriceLine({
@@ -724,7 +727,8 @@ export default function MarketDetail({
         ? tradePlan
         : signalTradePlan(selectedSignal, risk, {
             atrAbs: numeric(signal?.atr_abs) || atrFromCandles(biasBars),
-            rewardRatio,
+            rewardRatio: 1.0,
+            stopLoss: numeric(side === "SHORT" ? signal?.h || signal?.high : signal?.l || signal?.low) || numeric(signal?.stop_loss),
             spread: Number.isFinite(liquidity.spread) ? liquidity.spread : 0.0004,
           });
     onOpenPOA({
@@ -740,7 +744,6 @@ export default function MarketDetail({
       bias_state: biasWindow.state,
       bias_plan: biasWindow.plan,
       entry_price: selectedPlan?.entry,
-      dca1: selectedPlan?.dca,
       stop_loss: selectedPlan?.stop,
       tp1: selectedPlan?.tp1,
       tp2: selectedPlan?.tp1,
@@ -942,16 +945,11 @@ export default function MarketDetail({
         </div>
         {tradePlan && (
           <div className="space-y-2">
-            <div className="grid grid-cols-2 @3xl:grid-cols-4 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
+            <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
               {[
                 ["Entry", tradePlan.entry, "accent"],
-                [
-                  "DCA zone",
-                  `${fmtPrice(tradePlan.dcaZoneLow)} – ${fmtPrice(tradePlan.dcaZoneHigh)}`,
-                  "default",
-                ],
                 ["Stop loss", tradePlan.stop, "down"],
-                ["Take profit", tradePlan.tp1, "up"],
+                ["Take profit (1:1)", tradePlan.tp1, "up"],
               ].map(([label, value, tone]) => (
                 <div key={label} className="bg-[#0b0c0f] px-3 py-2.5">
                   <Metric

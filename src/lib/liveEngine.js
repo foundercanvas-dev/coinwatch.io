@@ -383,11 +383,8 @@ class LiveEngine {
       const amplitude = evaluation.amplitude * 100;
       const rr = rewardRatioFor(tf);
       const atrAbs = closedAtr(history);
-      const rawRisk = Math.max(
-        Math.abs(candidate.close - (isPump ? candidate.low : candidate.high)),
-        candidate.close * 0.002,
-      );
-      const risk = atrAbs > 0 ? atrAbs * TRADE_POLICY.atr_multiplier : rawRisk;
+      const slPrice = isPump ? candidate.low : candidate.high;
+      const risk = Math.max(Math.abs(candidate.close - slPrice), candidate.close * 0.0005);
       const prev = store.get(id);
       if (prev && TERMINAL_SIGNAL_STATES.has(prev.lifecycle_status)) continue;
       const sig = {
@@ -438,7 +435,7 @@ class LiveEngine {
         turnover_24h_usd: m.vol24,
         rr_ratio: `1:${rr}R`,
         entry_price: candidate.close,
-        stop_loss: +(isPump ? candidate.close - risk : candidate.close + risk).toPrecision(6),
+        stop_loss: +slPrice.toPrecision(6),
         tp1: +(isPump ? candidate.close + risk * rr : candidate.close - risk * rr).toPrecision(6),
         tp2: +(isPump ? candidate.close + risk * rr : candidate.close - risk * rr).toPrecision(6),
         candle_ts: candidate.openTime,
@@ -631,18 +628,15 @@ class LiveEngine {
       const amplitude = res.amplitude * 100;
       const rr = rewardRatioFor(tf);
       const atrAbs = closedAtr(hist);
-      const rawRisk = Math.max(
-        Math.abs(candle.close - (isPump ? candle.low : candle.high)),
-        candle.close * 0.002,
-      );
-      const risk = atrAbs > 0 ? atrAbs * TRADE_POLICY.atr_multiplier : rawRisk;
+      const slPrice = isPump ? candle.low : candle.high;
+      const risk = Math.max(Math.abs(candle.close - slPrice), candle.close * 0.0005);
       const ageMs = now - candle.openTime;
       let lifecycle_status = "target_hit";
       let outcome = "Target 1 reached";
       if (ageMs < 120_000) {
         lifecycle_status = "confirmed";
         outcome = "Signal confirmed";
-      } else if (isPump ? market.price < candle.close - risk : market.price > candle.close + risk) {
+      } else if (isPump ? market.price < slPrice : market.price > slPrice) {
         lifecycle_status = "stopped";
         outcome = "Stop loss reached";
       }
@@ -688,7 +682,7 @@ class LiveEngine {
         turnover_24h_usd: market.vol24,
         rr_ratio: `1:${rr}R`,
         entry_price: candle.close,
-        stop_loss: +(isPump ? candle.close - risk : candle.close + risk).toPrecision(6),
+        stop_loss: +slPrice.toPrecision(6),
         tp1: +(isPump ? candle.close + risk * rr : candle.close - risk * rr).toPrecision(6),
         tp2: +(isPump ? candle.close + risk * rr : candle.close - risk * rr).toPrecision(6),
         candle_ts: candle.openTime,

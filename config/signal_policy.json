@@ -1,11 +1,11 @@
 {
   "policy_version": "1.0.0",
   "timeframes": {
-    "1m": { "minutes": 1, "reward_ratio": 1.5, "ttl_seconds": 60 },
-    "5m": { "minutes": 5, "reward_ratio": 2.0, "ttl_seconds": 300 },
-    "15m": { "minutes": 15, "reward_ratio": 3.0, "ttl_seconds": 900 },
-    "1h": { "minutes": 60, "reward_ratio": 4.0, "ttl_seconds": 3600 },
-    "4h": { "minutes": 240, "reward_ratio": 6.0, "ttl_seconds": 14400 }
+    "1m": { "minutes": 1, "reward_ratio": 1.0, "ttl_seconds": 60 },
+    "5m": { "minutes": 5, "reward_ratio": 1.0, "ttl_seconds": 300 },
+    "15m": { "minutes": 15, "reward_ratio": 1.0, "ttl_seconds": 900 },
+    "1h": { "minutes": 60, "reward_ratio": 1.0, "ttl_seconds": 3600 },
+    "4h": { "minutes": 240, "reward_ratio": 1.0, "ttl_seconds": 14400 }
   },
   "sensitivity": {
     "default_pct": 0.8,
