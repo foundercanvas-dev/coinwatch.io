@@ -413,8 +413,7 @@ export default function App() {
           {activeNav === "order_flow" && (
             <OrderFlowView
               risk={risk}
-              onSelectCoin={openMarket}
-              soundEnabled={soundEnabled}
+              setActiveNav={setActiveNav}
             />
           )}
 

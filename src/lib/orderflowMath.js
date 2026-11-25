@@ -235,22 +235,27 @@ export function buildFootprintLevels(trades, tickSize, minImbalanceVol = 5) {
 }
 
 /**
- * Heavy Absorption detector:
- * - High Sell volume with < 0.05% downward move => Buyer Absorption (LONG)
- * - High Buy volume with < 0.05% upward move => Seller Absorption (SHORT)
- * Also checks Absorption Score = Traded Volume / Price Movement% and Delta flip.
+ * Heavy Absorption detector (strictly at recent swing Highs / swing Lows):
+ * - At a recent Low: High Sell volume absorbed with price holding => Buyer Absorption (LONG)
+ * - At a recent High: High Buy volume absorbed with price stalling => Seller Absorption (SHORT)
+ * Confluence with HVN and Delta flip boosts signal score in the background.
  */
-export function detectAbsorptionSignals(candles, symbol = "BTCUSDT") {
-  if (!Array.isArray(candles) || candles.length < 8) return [];
+export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile = null) {
+  if (!Array.isArray(candles) || candles.length < 15) return [];
   const avgVol =
-    candles.slice(-30).reduce((s, c) => s + Number(c.volume || 0), 0) /
-    Math.min(30, candles.length);
+    candles.slice(-40).reduce((s, c) => s + Number(c.volume || 0), 0) /
+    Math.min(40, candles.length);
 
   const signals = [];
-  for (let i = 3; i < candles.length - 1; i++) {
+  const lookback = 12;
+
+  for (let i = lookback; i < candles.length - 1; i++) {
     const cur = candles[i];
     const prev = candles[i - 1];
     const next = candles[Math.min(candles.length - 1, i + 2)];
+    const windowSlice = candles.slice(i - lookback, i + 1);
+    const recentLow = Math.min(...windowSlice.map((c) => c.low));
+    const recentHigh = Math.max(...windowSlice.map((c) => c.high));
 
     const buyVol = Number(cur.buyVol ?? cur.takerBuyVol ?? (cur.volume || 0) * 0.5);
     const sellVol = Math.max(0, Number(cur.volume || 0) - buyVol);
@@ -262,49 +267,69 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT") {
     const candleVol = Number(cur.volume || 0);
     const volUsd = candleVol * cur.close;
 
-    // Require meaningful relative volume (>= 1.8x average) & tight price hold (<= 0.12% for real futures)
-    if (!(candleVol > avgVol * 1.6)) continue;
+    if (!(candleVol > avgVol * 1.45)) continue;
 
-    const score = volUsd / Math.max(priceMovePct, 0.01);
+    const atRecentLow = cur.low <= recentLow * 1.0005;
+    const atRecentHigh = cur.high >= recentHigh * 0.9995;
+    if (!atRecentLow && !atRecentHigh) continue;
+
+    const nearHvn = hvnProfile?.hvns?.some(
+      (h) => Math.abs(h.price - cur.close) / cur.close <= 0.004,
+    );
     const deltaFlippedUp = prevDelta < 0 && curDelta > 0;
     const deltaFlippedDown = prevDelta > 0 && curDelta < 0;
 
-    // Buyer Absorption (sellers hit hard, price holds or bounces)
-    if (sellVol > buyVol * 1.15 && next.close >= cur.close * 0.9994) {
+    let baseScore = 62 + Math.min(20, Math.round((candleVol / Math.max(1e-9, avgVol)) * 6));
+    if (nearHvn) baseScore += 8;
+
+    // Buyer Absorption at Recent Swing Low (LONG)
+    if (atRecentLow && sellVol > buyVol * 1.1 && next.close >= cur.close * 0.9992) {
+      const score = Math.min(99, baseScore + (deltaFlippedUp ? 8 : 0));
       signals.push({
-        id: `abs-long-${cur.time}`,
+        id: `abs-long-${symbol}-${cur.time}`,
         type: "ABSORPTION",
         side: "LONG",
         symbol,
         time: cur.time,
-        price: cur.close,
-        absorbedVol: +sellVol.toFixed(2),
+        price: cur.low,
+        triggerClose: cur.close,
+        open: cur.open,
+        high: cur.high,
+        low: cur.low,
+        absorbedVol: +sellVol.toFixed(1),
         absorbedUsd: Math.round(sellVol * cur.close),
-        score: Math.round(score),
+        score,
+        nearHvn: Boolean(nearHvn),
         deltaFlip: deltaFlippedUp,
-        label: `ABSORPTION ${Math.round(sellVol)}`,
-        reason: `Heavy sell volume (${sellVol.toFixed(1)}) absorbed with price holding above ${cur.low.toFixed(2)}`,
+        label: `${Math.round(sellVol)}`,
+        reason: `Sell flow absorbed at recent swing low (${cur.low.toFixed(2)})`,
       });
-    } else if (buyVol > sellVol * 1.15 && next.close <= cur.close * 1.0006) {
-      // Seller Absorption (buyers hit hard, price stalls/reverses)
+    } else if (atRecentHigh && buyVol > sellVol * 1.1 && next.close <= cur.close * 1.0008) {
+      // Seller Absorption at Recent Swing High (SHORT)
+      const score = Math.min(99, baseScore + (deltaFlippedDown ? 8 : 0));
       signals.push({
-        id: `abs-short-${cur.time}`,
+        id: `abs-short-${symbol}-${cur.time}`,
         type: "ABSORPTION",
         side: "SHORT",
         symbol,
         time: cur.time,
-        price: cur.close,
-        absorbedVol: +buyVol.toFixed(2),
+        price: cur.high,
+        triggerClose: cur.close,
+        open: cur.open,
+        high: cur.high,
+        low: cur.low,
+        absorbedVol: +buyVol.toFixed(1),
         absorbedUsd: Math.round(buyVol * cur.close),
-        score: Math.round(score),
+        score,
+        nearHvn: Boolean(nearHvn),
         deltaFlip: deltaFlippedDown,
-        label: `ABSORPTION ${Math.round(buyVol)}`,
-        reason: `Heavy buy volume (${buyVol.toFixed(1)}) absorbed below ${cur.high.toFixed(2)}`,
+        label: `${Math.round(buyVol)}`,
+        reason: `Buy flow absorbed at recent swing high (${cur.high.toFixed(2)})`,
       });
     }
   }
 
-  return signals.slice(-12).reverse();
+  return signals.slice(-8).reverse();
 }
 
 /**
