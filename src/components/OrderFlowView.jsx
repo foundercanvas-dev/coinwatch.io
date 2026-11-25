@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
 import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
-import { fmtPrice, fmtUsd, fmtTime } from "../lib/format";
+import { fmtPrice, fmtUsd, fmtTime, pct } from "../lib/format";
 import {
   analyzeDomHeatmap,
   computeAtr14,
@@ -85,7 +85,10 @@ function formatCompactNum(n) {
 
 export default function OrderFlowView({ risk, setActiveNav }) {
   const [timeframe, setTimeframe] = useState("5m");
+  const [tab, setTab] = useState("active"); // active | history
   const [signals, setSignals] = useState([]);
+  const [historySignals, setHistorySignals] = useState([]);
+  const [flowStats, setFlowStats] = useState({ inflowUsd: 0, outflowUsd: 0 });
   const [scanning, setScanning] = useState(true);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [sideFilter, setSideFilter] = useState("all");
@@ -94,6 +97,9 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   const scanMarkets = useCallback(async () => {
     setScanning(true);
     try {
+      let totalInflowUsd = 0;
+      let totalOutflowUsd = 0;
+
       const results = await Promise.allSettled(
         WATCH_SYMBOLS.map(async (sym) => {
           const rows = await fetch(
@@ -101,10 +107,17 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           ).then((r) => r.json());
           const candles = parseBinanceKlines(rows);
           if (candles.length < 20) return [];
+
+          // Sum recent 12 candles buy/sell USD flow for live Inflow / Outflow cards
+          for (const c of candles.slice(-12)) {
+            totalInflowUsd += (c.buyVol || 0) * c.close;
+            totalOutflowUsd += (c.sellVol || 0) * c.close;
+          }
+
           const hvn = computeHvnProfile(candles, 50);
           const { divergence } = computeDeltaAndCVD(candles);
           const atr14 = computeAtr14(candles);
-          const abs = detectAbsorptionSignals(candles, sym, hvn);
+          const abs = detectAbsorptionSignals(candles, sym, hvn, { includeStopped: true });
 
           return abs.map((sig) => ({
             ...sig,
@@ -116,18 +129,25 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         }),
       );
 
-      const merged = [];
+      setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
+
+      const activeMerged = [];
+      const historyMerged = [];
       for (const res of results) {
         if (res.status === "fulfilled" && Array.isArray(res.value)) {
-          merged.push(...res.value);
+          for (const s of res.value) {
+            if (s.stoppedOut) historyMerged.push(s);
+            else activeMerged.push(s);
+          }
         }
       }
-      // Keep latest signal per symbol + sort newest first
+      // Keep latest active signal per symbol
       const bySym = new Map();
-      for (const s of merged.sort((a, b) => b.time - a.time)) {
+      for (const s of activeMerged.sort((a, b) => b.time - a.time)) {
         if (!bySym.has(s.symbol)) bySym.set(s.symbol, s);
       }
       setSignals([...bySym.values()].sort((a, b) => b.time - a.time));
+      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 30));
     } catch {
       /* keep previous signals */
     } finally {
@@ -153,11 +173,15 @@ export default function OrderFlowView({ risk, setActiveNav }) {
     );
   }
 
-  const visibleSignals = signals.filter(
+  const sourceList = tab === "active" ? signals : historySignals;
+  const visibleSignals = sourceList.filter(
     (s) => sideFilter === "all" || s.side === sideFilter.toUpperCase(),
   );
   const longCount = signals.filter((s) => s.side === "LONG").length;
   const shortCount = signals.filter((s) => s.side === "SHORT").length;
+  const totalFlow = flowStats.inflowUsd + flowStats.outflowUsd;
+  const inflowPct = totalFlow > 0 ? (flowStats.inflowUsd / totalFlow) * 100 : 50;
+  const outflowPct = 100 - inflowPct;
 
   return (
     <div className="space-y-4">
@@ -179,6 +203,35 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         }
       />
 
+      {/* Live Crypto Inflow / Outflow 2 Cards */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="cw-panel cw-glow cw-glow-soft p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-fog">
+              <TrendUp weight="bold" className="w-4 h-4 text-mint" /> Crypto Inflow (Live)
+            </span>
+            <span className="cw-num text-[12px] font-semibold text-mint">{inflowPct.toFixed(1)}%</span>
+          </div>
+          <div className="cw-num text-[22px] font-semibold text-snow">{fmtUsd(flowStats.inflowUsd)}</div>
+          <div className="h-1.5 w-full rounded-full bg-white/[0.06] overflow-hidden">
+            <div className="h-full bg-mint transition-[width] duration-500" style={{ width: `${inflowPct}%` }} />
+          </div>
+        </div>
+
+        <div className="cw-panel cw-glow cw-glow-soft p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-fog">
+              <TrendDown weight="bold" className="w-4 h-4 text-coral" /> Crypto Outflow (Live)
+            </span>
+            <span className="cw-num text-[12px] font-semibold text-coral">{outflowPct.toFixed(1)}%</span>
+          </div>
+          <div className="cw-num text-[22px] font-semibold text-snow">{fmtUsd(flowStats.outflowUsd)}</div>
+          <div className="h-1.5 w-full rounded-full bg-white/[0.06] overflow-hidden">
+            <div className="h-full bg-coral transition-[width] duration-500" style={{ width: `${outflowPct}%` }} />
+          </div>
+        </div>
+      </div>
+
       {/* Compact Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="Watched Pairs" value={WATCH_SYMBOLS.length} caption="Live market feed" />
@@ -187,15 +240,18 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         <StatCard label="Sell Setups" value={shortCount} caption="Near recent highs" tone="down" />
       </div>
 
-      {/* Filter Bar */}
+      {/* Filter Bar + Active / History */}
       <section className="cw-panel p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Lightning weight="duotone" className="w-4 h-4 text-mint" />
-            <span className="text-[13px] font-medium text-snow">
-              Active Setups
-            </span>
-          </div>
+          <Segmented
+            size="sm"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: "active", label: "Active", badge: signals.length },
+              { value: "history", label: "History", badge: historySignals.length },
+            ]}
+          />
           <Segmented
             size="sm"
             value={sideFilter}
@@ -208,10 +264,11 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           />
         </div>
 
-        <div className="grid gap-3 @3xl:grid-cols-2 @5xl:grid-cols-3">
+        <div className="grid gap-3 @3xl:grid-cols-2">
           {visibleSignals.map((sig) => {
             const isLong = sig.side === "LONG";
             const baseCoin = sig.symbol.replace(/USDT$/, "");
+            const moveVal = Number(sig.movePct || 0);
             return (
               <button
                 key={sig.id}
@@ -239,16 +296,25 @@ export default function OrderFlowView({ risk, setActiveNav }) {
                     </div>
                   </div>
 
-                  <div className="text-right shrink-0">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                        isLong ? "bg-mint/15 text-mint" : "bg-coral/15 text-coral"
-                      }`}
-                    >
-                      {isLong ? <TrendUp weight="bold" className="w-3.5 h-3.5" /> : <TrendDown weight="bold" className="w-3.5 h-3.5" />}
-                      {sig.side}
-                    </span>
-                    <div className="text-[11px] text-fog-2 mt-1 cw-num">Score {sig.score}</div>
+                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-1.5">
+                      {sig.stoppedOut && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/[0.06] text-fog">
+                          Stopped out
+                        </span>
+                      )}
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                          isLong ? "bg-mint/15 text-mint" : "bg-coral/15 text-coral"
+                        }`}
+                      >
+                        {isLong ? <TrendUp weight="bold" className="w-3.5 h-3.5" /> : <TrendDown weight="bold" className="w-3.5 h-3.5" />}
+                        {sig.side}
+                      </span>
+                    </div>
+                    <div className={`cw-num text-[13px] font-semibold ${moveVal >= 0 ? "text-mint" : "text-coral"}`}>
+                      {pct(moveVal)}
+                    </div>
                   </div>
                 </div>
 
@@ -276,9 +342,11 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
           {!visibleSignals.length && (
             <div className="col-span-full py-14 text-center text-[12px] text-fog-2">
-              {scanning
-                ? "Looking for clean setups at recent highs and lows…"
-                : "No active setups right now. Check back shortly."}
+              {tab === "history"
+                ? "No stopped-out setups in history yet."
+                : scanning
+                  ? "Looking for clean setups at recent highs and lows…"
+                  : "No active setups right now. Check back shortly."}
             </div>
           )}
         </div>
@@ -308,6 +376,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
   const [absorptions, setAbsorptions] = useState([signal]);
   const [live, setLive] = useState(false);
   const [lastPrice, setLastPrice] = useState(signal.price || 0);
+  const [liveVol, setLiveVol] = useState({ buyUsd: 0, sellUsd: 0 });
   const [dom, setDom] = useState({ bids: [], asks: [], buyWalls: [], sellWalls: [], spoofs: [] });
   const [spoofLog, setSpoofLog] = useState([]);
 
@@ -444,7 +513,14 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
         const parsed = parseBinanceKlines(klineRows);
         candlesRef.current = parsed;
         setCandles(parsed);
-        if (parsed.length) setLastPrice(parsed[parsed.length - 1].close);
+        if (parsed.length) {
+          const lastBar = parsed[parsed.length - 1];
+          setLastPrice(lastBar.close);
+          setLiveVol({
+            buyUsd: (lastBar.buyVol || 0) * lastBar.close,
+            sellUsd: (lastBar.sellVol || 0) * lastBar.close,
+          });
+        }
         const hvn = computeHvnProfile(parsed, 50);
         const abs = detectAbsorptionSignals(parsed, sym, hvn);
         const list = abs.length ? abs : [signal];
@@ -507,6 +583,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
                   sellVol: isSell ? qty : 0,
                 };
                 candlesRef.current = [...list, newBar].slice(-200);
+                setLiveVol({
+                  buyUsd: newBar.buyVol * price,
+                  sellUsd: newBar.sellVol * price,
+                });
                 try {
                   seriesRef.current?.update(newBar);
                   requestAnimationFrame(drawAbsorptionCircles);
@@ -524,6 +604,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
                   sellVol: last.sellVol + (isSell ? qty : 0),
                 };
                 candlesRef.current = [...list.slice(0, -1), updatedLast];
+                setLiveVol({
+                  buyUsd: updatedLast.buyVol * price,
+                  sellUsd: updatedLast.sellVol * price,
+                });
                 try {
                   seriesRef.current?.update(updatedLast);
                   requestAnimationFrame(drawAbsorptionCircles);
@@ -562,6 +646,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
               sellVol: Math.max(0, vol - buyVol),
             };
             setLastPrice(bar.close);
+            setLiveVol({
+              buyUsd: bar.buyVol * bar.close,
+              sellUsd: bar.sellVol * bar.close,
+            });
             const list = candlesRef.current;
             const last = list[list.length - 1];
             if (!last || t >= last.time) {
@@ -665,7 +753,24 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     });
   }, [risk, signal, candles]);
 
-  // Update chart candles + ONLY Entry/SL/TP lines + redraw circles
+  // Check if SL was hit (either on load or live)
+  const isStoppedOut = useMemo(() => {
+    if (signal.stoppedOut) return true;
+    const stopPrice = tradePlan?.stop || (signal.side === "SHORT" ? signal.high : signal.low);
+    if (!(stopPrice > 0)) return false;
+    if (lastPrice > 0) {
+      if (signal.side === "LONG" && lastPrice <= stopPrice) return true;
+      if (signal.side === "SHORT" && lastPrice >= stopPrice) return true;
+    }
+    for (const c of candles) {
+      if (c.time <= signal.time) continue;
+      if (signal.side === "LONG" && c.low <= stopPrice) return true;
+      if (signal.side === "SHORT" && c.high >= stopPrice) return true;
+    }
+    return false;
+  }, [signal, tradePlan, lastPrice, candles]);
+
+  // Update chart candles + ONLY Entry/SL lines (removed when stopped out) + redraw circles
   useEffect(() => {
     const series = seriesRef.current;
     if (!series || !candles.length) return;
@@ -691,7 +796,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
       }
     }
     const lines = [];
-    if (tradePlan) {
+    if (tradePlan && !isStoppedOut) {
       const specs = [
         ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid],
         ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid],
@@ -717,7 +822,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     }
     priceLinesRef.current = lines;
     requestAnimationFrame(drawAbsorptionCircles);
-  }, [candles, tradePlan, absorptions, drawAbsorptionCircles]);
+  }, [candles, tradePlan, isStoppedOut, absorptions, drawAbsorptionCircles]);
 
   const baseCoin = signal.symbol.replace(/USDT$/, "");
   const isLong = signal.side === "LONG";
@@ -756,9 +861,18 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
         }
       />
 
-      {/* Risk Setup Gate / Trade Plan */}
+      {/* Risk Setup Gate / Trade Plan + Live Volume Bar */}
       <section className="cw-panel cw-glow p-4 space-y-3">
-        {!risk?.configured ? (
+        {isStoppedOut ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-coral/30 bg-coral/[0.06] px-4 py-3">
+            <div className="space-y-0.5">
+              <div className="text-[13px] font-semibold text-coral">Stopped out</div>
+              <div className="text-[11px] text-fog-2">
+                Stop loss level was reached — Entry &amp; SL removed from chart.
+              </div>
+            </div>
+          </div>
+        ) : !risk?.configured ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#0b0c0f] px-4 py-3">
             <div className="space-y-0.5">
               <div className="text-[13px] font-medium text-snow">Risk setup required</div>
@@ -793,6 +907,38 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             </div>
           )
         )}
+
+        {/* Live Volume Bar below Entry / SL */}
+        {(() => {
+          const totalUsd = liveVol.buyUsd + liveVol.sellUsd;
+          const buyPct = totalUsd > 0 ? (liveVol.buyUsd / totalUsd) * 100 : 50;
+          const sellPct = 100 - buyPct;
+          return (
+            <div className="rounded-xl border border-white/[0.06] bg-[#0b0c0f] px-3.5 py-2.5 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] cw-num">
+                <span className="text-mint font-medium">
+                  Buy Volume: {fmtUsd(liveVol.buyUsd)} ({buyPct.toFixed(0)}%)
+                </span>
+                <span className="text-fog-2">
+                  Current {chartIv} Volume: <strong className="text-snow">{fmtUsd(totalUsd)}</strong>
+                </span>
+                <span className="text-coral font-medium">
+                  Sell Volume: {fmtUsd(liveVol.sellUsd)} ({sellPct.toFixed(0)}%)
+                </span>
+              </div>
+              <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/[0.05]">
+                <div
+                  className="h-full bg-mint transition-[width] duration-300"
+                  style={{ width: `${buyPct}%` }}
+                />
+                <div
+                  className="h-full bg-coral transition-[width] duration-300"
+                  style={{ width: `${sellPct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       {/* Clean Candlestick Chart with 10% Opacity Absorption Circle Overlay + MBO DOM Side Panel */}

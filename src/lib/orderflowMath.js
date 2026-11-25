@@ -240,7 +240,7 @@ export function buildFootprintLevels(trades, tickSize, minImbalanceVol = 5) {
  * - At a recent High: High Buy volume absorbed with price stalling => Seller Absorption (SHORT)
  * Confluence with HVN and Delta flip boosts signal score in the background.
  */
-export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile = null) {
+export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile = null, { includeStopped = false } = {}) {
   if (!Array.isArray(candles) || candles.length < 15) return [];
   const avgVol =
     candles.slice(-40).reduce((s, c) => s + Number(c.volume || 0), 0) /
@@ -248,6 +248,7 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
 
   const signals = [];
   const lookback = 12;
+  const latestClose = candles[candles.length - 1]?.close || 0;
 
   for (let i = lookback; i < candles.length - 1; i++) {
     const cur = candles[i];
@@ -263,9 +264,7 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
     const prevBuy = Number(prev.buyVol ?? prev.takerBuyVol ?? (prev.volume || 0) * 0.5);
     const prevDelta = prevBuy - Math.max(0, Number(prev.volume || 0) - prevBuy);
 
-    const priceMovePct = Math.abs(((next.close - cur.close) / Math.max(1e-9, cur.close)) * 100);
     const candleVol = Number(cur.volume || 0);
-    const volUsd = candleVol * cur.close;
 
     if (!(candleVol > avgVol * 1.45)) continue;
 
@@ -284,7 +283,6 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
 
     // Buyer Absorption at Recent Swing Low (LONG)
     if (atRecentLow && sellVol > buyVol * 1.1 && next.close >= cur.close * 0.9992) {
-      // Skip if SL (cur.low) was already broken by any subsequent candle
       let stoppedOut = false;
       for (let j = i + 1; j < candles.length; j++) {
         if (candles[j].low <= cur.low) {
@@ -292,8 +290,9 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
           break;
         }
       }
-      if (stoppedOut) continue;
+      if (stoppedOut && !includeStopped) continue;
 
+      const movePct = cur.close > 0 ? ((latestClose - cur.close) / cur.close) * 100 : 0;
       const score = Math.min(99, baseScore + (deltaFlippedUp ? 8 : 0));
       signals.push({
         id: `abs-long-${symbol}-${cur.time}`,
@@ -308,6 +307,8 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
         low: cur.low,
         absorbedVol: +sellVol.toFixed(1),
         absorbedUsd: Math.round(sellVol * cur.close),
+        movePct: +movePct.toFixed(2),
+        stoppedOut,
         score,
         nearHvn: Boolean(nearHvn),
         deltaFlip: deltaFlippedUp,
@@ -315,7 +316,6 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
         reason: `Sell flow absorbed at recent swing low (${cur.low.toFixed(2)})`,
       });
     } else if (atRecentHigh && buyVol > sellVol * 1.1 && next.close <= cur.close * 1.0008) {
-      // Skip if SL (cur.high) was already broken by any subsequent candle
       let stoppedOut = false;
       for (let j = i + 1; j < candles.length; j++) {
         if (candles[j].high >= cur.high) {
@@ -323,9 +323,9 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
           break;
         }
       }
-      if (stoppedOut) continue;
+      if (stoppedOut && !includeStopped) continue;
 
-      // Seller Absorption at Recent Swing High (SHORT)
+      const movePct = cur.close > 0 ? ((latestClose - cur.close) / cur.close) * 100 : 0;
       const score = Math.min(99, baseScore + (deltaFlippedDown ? 8 : 0));
       signals.push({
         id: `abs-short-${symbol}-${cur.time}`,
@@ -340,6 +340,8 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
         low: cur.low,
         absorbedVol: +buyVol.toFixed(1),
         absorbedUsd: Math.round(buyVol * cur.close),
+        movePct: +movePct.toFixed(2),
+        stoppedOut,
         score,
         nearHvn: Boolean(nearHvn),
         deltaFlip: deltaFlippedDown,
@@ -349,7 +351,7 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
     }
   }
 
-  return signals.slice(-8).reverse();
+  return signals.slice(-10).reverse();
 }
 
 /**
