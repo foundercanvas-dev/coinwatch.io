@@ -274,11 +274,19 @@ export function detectAbsorptionSignals(
 
     const candleVol = Number(cur.volume || 0);
 
-    if (!(candleVol > avgVol * 1.45)) continue;
+    // Strict 2.0x volume gate
+    if (!(candleVol >= avgVol * 2.0)) continue;
 
     const atRecentLow = cur.low <= recentLow * 1.0005;
     const atRecentHigh = cur.high >= recentHigh * 0.9995;
     if (!atRecentLow && !atRecentHigh) continue;
+
+    // Wick rejection check (at least 35% rejection wick)
+    const candleRange = Math.max(0, cur.high - cur.low);
+    const lowerWickRatio =
+      candleRange > 0 ? (Math.min(cur.open, cur.close) - cur.low) / candleRange : 0;
+    const upperWickRatio =
+      candleRange > 0 ? (cur.high - Math.max(cur.open, cur.close)) / candleRange : 0;
 
     const nearHvn = hvnProfile?.hvns?.some(
       (h) => Math.abs(h.price - cur.close) / cur.close <= 0.004,
@@ -289,8 +297,15 @@ export function detectAbsorptionSignals(
     let baseScore = 62 + Math.min(20, Math.round((candleVol / Math.max(1e-9, avgVol)) * 6));
     if (nearHvn) baseScore += 8;
 
-    // Buyer Absorption at Recent Swing Low (LONG)
-    if (atRecentLow && sellVol > buyVol * 1.1 && next.close >= cur.close * 0.9992 && i - lastLongIdx >= 5) {
+    // Buyer Absorption at Recent Swing Low (LONG) — requires >=35% lower wick + HVN or Delta Flip confluence
+    if (
+      atRecentLow &&
+      lowerWickRatio >= 0.35 &&
+      (nearHvn || deltaFlippedUp) &&
+      sellVol > buyVol * 1.1 &&
+      next.close >= cur.close * 0.9992 &&
+      i - lastLongIdx >= 5
+    ) {
       lastLongIdx = i;
       let stoppedOut = false;
       for (let j = i + 1; j < candles.length; j++) {
@@ -324,7 +339,14 @@ export function detectAbsorptionSignals(
         label: `${Math.round(sellVol)}`,
         reason: `Sell flow absorbed at recent swing low (${cur.low.toFixed(2)})`,
       });
-    } else if (atRecentHigh && buyVol > sellVol * 1.1 && next.close <= cur.close * 1.0008 && i - lastShortIdx >= 5) {
+    } else if (
+      atRecentHigh &&
+      upperWickRatio >= 0.35 &&
+      (nearHvn || deltaFlippedDown) &&
+      buyVol > sellVol * 1.1 &&
+      next.close <= cur.close * 1.0008 &&
+      i - lastShortIdx >= 5
+    ) {
       lastShortIdx = i;
       let stoppedOut = false;
       for (let j = i + 1; j < candles.length; j++) {

@@ -227,7 +227,37 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           historyMerged.push({ ...s, expired: true });
         }
       }
-      setSignals([...byKey.values()].sort((a, b) => b.time - a.time));
+      // Order Book Wall confirmation in background for active candidates
+      const activeList = [...byKey.values()];
+      const uniqueActiveSyms = [...new Set(activeList.map((s) => s.symbol))].slice(0, 24);
+      const wallBySym = new Map();
+      await Promise.allSettled(
+        uniqueActiveSyms.map(async (sym) => {
+          const depth = await fetch(
+            `https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=20`,
+          ).then((r) => r.json());
+          if (depth?.bids && depth?.asks) {
+            const analyzed = analyzeDomHeatmap(depth.bids, depth.asks, new Map(), Date.now(), 0);
+            wallBySym.set(sym, {
+              hasBuyWall: analyzed.buyWalls.length > 0,
+              hasSellWall: analyzed.sellWalls.length > 0,
+            });
+          }
+        }),
+      );
+
+      const enrichedActive = activeList.map((s) => {
+        const w = wallBySym.get(s.symbol);
+        const hasWallConfirm =
+          Boolean(w) && (s.side === "LONG" ? w.hasBuyWall : w.hasSellWall);
+        return {
+          ...s,
+          hasWallConfirm,
+          score: hasWallConfirm ? Math.min(99, s.score + 10) : s.score,
+        };
+      });
+
+      setSignals(enrichedActive.sort((a, b) => b.time - a.time));
       setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 60));
     } catch {
       /* keep previous signals */
