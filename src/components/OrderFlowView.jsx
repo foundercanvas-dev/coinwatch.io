@@ -71,7 +71,7 @@ async function fetchLiquidFuturesSymbols() {
   return FALLBACK_SYMBOLS;
 }
 
-const TIMEFRAMES = [
+const CHART_TIMEFRAMES = [
   { value: "1m", label: "1m" },
   { value: "3m", label: "3m" },
   { value: "5m", label: "5m" },
@@ -80,6 +80,10 @@ const TIMEFRAMES = [
   { value: "4h", label: "4h" },
   { value: "1d", label: "1d" },
 ];
+
+const TIMEFRAMES = [{ value: "all", label: "All" }, ...CHART_TIMEFRAMES];
+
+const ALL_SCAN_TFS = ["1m", "5m", "15m", "1h"];
 
 const IV_SEC = {
   "1m": 60,
@@ -90,6 +94,17 @@ const IV_SEC = {
   "4h": 14400,
   "1d": 86400,
 };
+
+const newWindowFor = (tf) => Math.max(300, (IV_SEC[tf] || 300) * 4);
+
+function formatCountdown(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+  return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
 
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
 
@@ -119,7 +134,7 @@ function formatCompactNum(n) {
 }
 
 export default function OrderFlowView({ risk, setActiveNav }) {
-  const [timeframe, setTimeframe] = useState("5m");
+  const [timeframe, setTimeframe] = useState("all");
   const [tab, setTab] = useState("new"); // new | active | history
   const [watchedCount, setWatchedCount] = useState(FALLBACK_SYMBOLS.length);
   const [signals, setSignals] = useState([]);
@@ -131,15 +146,17 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
-    const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 10000);
+    const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Background scanner across all liquid Binance Futures pairs (batched to avoid rate limits)
+  // Background scanner across liquid Binance Futures pairs & timeframes
   const scanMarkets = useCallback(async () => {
     setScanning(true);
     try {
-      const symbols = await fetchLiquidFuturesSymbols();
+      const allSymbols = await fetchLiquidFuturesSymbols();
+      const targetTfs = timeframe === "all" ? ALL_SCAN_TFS : [timeframe];
+      const symbols = timeframe === "all" ? allSymbols.slice(0, 28) : allSymbols;
       setWatchedCount(symbols.length);
 
       let totalInflowUsd = 0;
@@ -147,21 +164,30 @@ export default function OrderFlowView({ risk, setActiveNav }) {
       const activeMerged = [];
       const historyMerged = [];
 
-      const batchSize = 16;
-      for (let i = 0; i < symbols.length; i += batchSize) {
-        const batch = symbols.slice(i, i + batchSize);
+      const jobs = [];
+      for (const tf of targetTfs) {
+        for (const sym of symbols) {
+          jobs.push({ sym, tf });
+        }
+      }
+
+      const batchSize = 20;
+      for (let i = 0; i < jobs.length; i += batchSize) {
+        const batch = jobs.slice(i, i + batchSize);
         const results = await Promise.allSettled(
-          batch.map(async (sym) => {
+          batch.map(async ({ sym, tf }) => {
             const rows = await fetch(
-              `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=120`,
+              `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=120`,
             ).then((r) => r.json());
             const candles = parseBinanceKlines(rows);
             if (candles.length < 20) return [];
 
-            // Sum recent 12 candles buy/sell USD flow for live Inflow / Outflow cards
-            for (const c of candles.slice(-12)) {
-              totalInflowUsd += (c.buyVol || 0) * c.close;
-              totalOutflowUsd += (c.sellVol || 0) * c.close;
+            // Sum recent 12 candles buy/sell USD flow once per symbol (from primary TF)
+            if (tf === targetTfs[0]) {
+              for (const c of candles.slice(-12)) {
+                totalInflowUsd += (c.buyVol || 0) * c.close;
+                totalOutflowUsd += (c.sellVol || 0) * c.close;
+              }
             }
 
             const hvn = computeHvnProfile(candles, 50);
@@ -171,7 +197,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
             return abs.map((sig) => ({
               ...sig,
-              timeframe,
+              timeframe: tf,
               atr14,
               hasCvdDivergence: Boolean(divergence && divergence.side === sig.side),
               score: Math.min(99, sig.score + (divergence && divergence.side === sig.side ? 5 : 0)),
@@ -191,17 +217,18 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
       setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
 
-      // Keep latest active signal per symbol; any older superseded signal moves to History
-      const bySym = new Map();
+      // Keep latest active signal per (symbol + timeframe); older ones move to History
+      const byKey = new Map();
       for (const s of activeMerged.sort((a, b) => b.time - a.time)) {
-        if (!bySym.has(s.symbol)) {
-          bySym.set(s.symbol, s);
+        const key = `${s.symbol}:${s.timeframe}`;
+        if (!byKey.has(key)) {
+          byKey.set(key, s);
         } else {
           historyMerged.push({ ...s, expired: true });
         }
       }
-      setSignals([...bySym.values()].sort((a, b) => b.time - a.time));
-      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 50));
+      setSignals([...byKey.values()].sort((a, b) => b.time - a.time));
+      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 60));
     } catch {
       /* keep previous signals */
     } finally {
@@ -219,7 +246,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
     return (
       <OrderFlowSignalChart
         signal={selectedSignal}
-        timeframe={timeframe}
+        timeframe={selectedSignal.timeframe || "5m"}
         risk={risk}
         onBack={() => setSelectedSignal(null)}
         onSwitchSignal={(nextSig) => setSelectedSignal(nextSig)}
@@ -228,9 +255,12 @@ export default function OrderFlowView({ risk, setActiveNav }) {
     );
   }
 
-  const newWindowSec = Math.max(300, (IV_SEC[timeframe] || 300) * 4);
-  const newSignals = signals.filter((s) => nowSec - (s.time - TZ_SHIFT) <= newWindowSec);
-  const activeSignals = signals.filter((s) => nowSec - (s.time - TZ_SHIFT) > newWindowSec);
+  const newSignals = signals.filter(
+    (s) => nowSec - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
+  );
+  const activeSignals = signals.filter(
+    (s) => nowSec - (s.time - TZ_SHIFT) > newWindowFor(s.timeframe),
+  );
   const sourceList =
     tab === "new" ? newSignals : tab === "active" ? activeSignals : historySignals;
   const visibleSignals = sourceList.filter(
@@ -297,7 +327,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         <StatCard
           label="New Setups"
           value={newSignals.length}
-          caption={`Within ${Math.round(newWindowSec / 60)}m window`}
+          caption="Per-timeframe live window"
           highlight
         />
         <StatCard label="Active Setups" value={activeSignals.length} caption="Open until SL / new signal" />
@@ -339,38 +369,62 @@ export default function OrderFlowView({ risk, setActiveNav }) {
             const isLong = sig.side === "LONG";
             const baseCoin = sig.symbol.replace(/USDT$/, "");
             const moveVal = Number(sig.movePct || 0);
+            const winSec = newWindowFor(sig.timeframe);
+            const ageSec = Math.max(0, nowSec - (sig.time - TZ_SHIFT));
+            const remSec = Math.max(0, winSec - ageSec);
+            const remPct = Math.max(0, Math.min(100, (remSec / winSec) * 100));
+            const isNew = tab === "new" && remSec > 0;
+            const spanFull = visibleSignals.length === 1;
+
             return (
               <button
                 key={sig.id}
                 type="button"
                 onClick={() => setSelectedSignal(sig)}
-                className="cw-card cw-hover cw-press text-left p-4 space-y-3"
+                className={`cw-card cw-hover cw-press text-left p-4 space-y-3 ${
+                  spanFull ? "col-span-full" : ""
+                } ${
+                  isNew
+                    ? isLong
+                      ? "cw-vol-mid-up !border-mint/35"
+                      : "cw-vol-mid-down !border-coral/35"
+                    : ""
+                }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
+                {isNew && (
+                  <div className="pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/[0.04] to-transparent cw-sweep" />
+                )}
+
+                <div className="relative flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
                     <CoinIcon
                       symbol={sig.symbol}
                       coin={baseCoin}
                       exchange="binance"
-                      className="w-8 h-8 shrink-0"
+                      className="w-9 h-9 shrink-0"
                       isPump={isLong}
                     />
                     <div className="min-w-0">
-                      <div className="text-[14px] font-semibold text-snow truncate">
-                        {baseCoin}
-                        <span className="text-fog-2 font-normal">/USDT</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[15px] font-semibold text-snow truncate">
+                          {baseCoin}
+                          <span className="text-fog-2 font-normal">/USDT</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-[12px] font-bold uppercase text-snow cw-num">
+                          {sig.timeframe}
+                        </span>
                       </div>
-                      <div className="text-[11px] text-fog-2 cw-num">
-                        {fmtTime((sig.time - TZ_SHIFT) * 1000)} · {sig.timeframe}
+                      <div className="text-[11px] text-fog-2 cw-num mt-0.5">
+                        {fmtTime((sig.time - TZ_SHIFT) * 1000)}
                       </div>
                     </div>
                   </div>
 
-                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                  <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
                     <div className="flex items-center gap-1.5">
-                      {tab === "new" && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-mint/15 text-mint">
-                          NEW
+                      {isNew && (
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-mint/15 border border-mint/30 text-mint cw-num">
+                          NEW · {formatCountdown(remSec)}
                         </span>
                       )}
                       {(sig.stoppedOut || sig.reversed || sig.expired) && (
@@ -379,21 +433,23 @@ export default function OrderFlowView({ risk, setActiveNav }) {
                         </span>
                       )}
                       <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                          isLong ? "bg-mint/15 text-mint" : "bg-coral/15 text-coral"
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                          isLong
+                            ? "bg-mint/15 border-mint/40 text-mint cw-vol-high-up"
+                            : "bg-coral/15 border-coral/40 text-coral cw-vol-high-down"
                         }`}
                       >
                         {isLong ? <TrendUp weight="bold" className="w-3.5 h-3.5" /> : <TrendDown weight="bold" className="w-3.5 h-3.5" />}
                         {sig.side}
                       </span>
                     </div>
-                    <div className={`cw-num text-[13px] font-semibold ${moveVal >= 0 ? "text-mint" : "text-coral"}`}>
+                    <div className={`cw-num text-[14px] font-semibold ${moveVal >= 0 ? "text-mint" : "text-coral"}`}>
                       {pct(moveVal)}
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/[0.05] text-[11px]">
+                <div className="relative grid grid-cols-3 gap-2 pt-2 border-t border-white/[0.05] text-[11px]">
                   <div>
                     <div className="text-fog-2">Price</div>
                     <div className="cw-num text-snow font-medium mt-0.5">{fmtPrice(sig.price)}</div>
@@ -411,6 +467,17 @@ export default function OrderFlowView({ risk, setActiveNav }) {
                     </div>
                   </div>
                 </div>
+
+                {isNew && (
+                  <div className="relative h-1 w-full rounded-full bg-white/[0.06] overflow-hidden">
+                    <div
+                      className={`h-full transition-[width] duration-1000 ${
+                        isLong ? "bg-mint" : "bg-coral"
+                      }`}
+                      style={{ width: `${remPct}%` }}
+                    />
+                  </div>
+                )}
               </button>
             );
           })}
@@ -422,7 +489,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
                 : tab === "new"
                   ? scanning
                     ? "Scanning for fresh setups…"
-                    : `No new setups within the last ${Math.round(newWindowSec / 60)}m window — check Active.`
+                    : "No new setups in their live window right now — check Active."
                   : scanning
                     ? "Looking for active setups…"
                     : "No active setups right now."}
@@ -1022,7 +1089,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
               size="sm"
               value={chartIv}
               onChange={setChartIv}
-              options={TIMEFRAMES}
+              options={CHART_TIMEFRAMES}
             />
             <button onClick={onBack} className="cw-btn !h-9">
               <ArrowLeft weight="bold" className="w-4 h-4" /> Back to signals
