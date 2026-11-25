@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   ShieldCheck,
   Lightning,
-  ChevronRight,
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
 import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
