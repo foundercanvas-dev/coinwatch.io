@@ -11,7 +11,7 @@ import POAModal from "./components/POAModal";
 import CorrelationView from "./components/CorrelationView";
 import OrderFlowView, { fetchOrderFlowNewSignals } from "./components/OrderFlowView";
 import CoinIcon from "./components/CoinIcon";
-import { fmtPrice } from "./lib/format";
+import { fmtPrice, fmtTime } from "./lib/format";
 import { rewardRatioFor, SENSITIVITY_POLICY } from "./lib/signalPolicy";
 
 export default function App() {
@@ -551,7 +551,8 @@ export default function App() {
                   </span>
                 </div>
                 <div className="text-[11px] text-fog-2 cw-num">
-                  Level: {fmtPrice(orderFlowToast.price)}
+                  Level: {fmtPrice(orderFlowToast.price)} ·{" "}
+                  {fmtTime((orderFlowToast.time + new Date().getTimezoneOffset() * 60) * 1000)}
                 </div>
               </div>
             </div>

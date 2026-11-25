@@ -1167,8 +1167,13 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
           </span>
         }
         description={
-          <span className="inline-flex items-center gap-2">
+          <span className="inline-flex flex-wrap items-center gap-2">
             <span>{`${isLong ? "Buy" : "Sell"} setup near recent ${isLong ? "low" : "high"} · ${chartIv}`}</span>
+            {tfSetup?.time && (
+              <span className="cw-num text-fog">
+                · {fmtTime((tfSetup.time - TZ_SHIFT) * 1000)}
+              </span>
+            )}
             <span
               className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                 reversalSignal
