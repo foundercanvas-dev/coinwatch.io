@@ -569,6 +569,14 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
               const updated =
                 idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-200);
               candlesRef.current = updated;
+              if (k.x) {
+                const hvn = computeHvnProfile(updated, 50);
+                const abs = detectAbsorptionSignals(updated, sym, hvn);
+                if (abs.length) {
+                  absorptionsRef.current = abs;
+                  setAbsorptions(abs);
+                }
+              }
               try {
                 seriesRef.current?.update(bar);
                 requestAnimationFrame(drawAbsorptionCircles);
@@ -611,6 +619,12 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
               /* ignore */
             }
           }
+        }
+        const hvn = computeHvnProfile(candlesRef.current, 50);
+        const abs = detectAbsorptionSignals(candlesRef.current, sym, hvn);
+        if (abs.length) {
+          absorptionsRef.current = abs;
+          setAbsorptions(abs);
         }
         requestAnimationFrame(drawAbsorptionCircles);
       } catch {
