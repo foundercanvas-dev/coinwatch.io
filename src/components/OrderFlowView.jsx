@@ -381,6 +381,9 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
   const [dom, setDom] = useState({ bids: [], asks: [], buyWalls: [], sellWalls: [], spoofs: [] });
   const [spoofLog, setSpoofLog] = useState([]);
   const [popupDismissedId, setPopupDismissedId] = useState(null);
+  const [chartMenu, setChartMenu] = useState(null);
+  const [customLinesCount, setCustomLinesCount] = useState(0);
+  const [showEntrySl, setShowEntrySl] = useState(true);
 
   const chartWrapRef = useRef(null);
   const chartElRef = useRef(null);
@@ -388,6 +391,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const priceLinesRef = useRef([]);
+  const customLinesRef = useRef([]);
   const candlesRef = useRef([]);
   const absorptionsRef = useRef([signal]);
   const wallTrackerRef = useRef(new Map());
@@ -845,7 +849,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
       }
     }
     const lines = [];
-    if (tradePlan && !setupClosed) {
+    if (tradePlan && !setupClosed && showEntrySl) {
       const specs = [
         ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid],
         ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid],
@@ -871,7 +875,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
     }
     priceLinesRef.current = lines;
     requestAnimationFrame(drawAbsorptionCircles);
-  }, [candles, tradePlan, setupClosed, absorptions, drawAbsorptionCircles]);
+  }, [candles, tradePlan, setupClosed, showEntrySl, absorptions, drawAbsorptionCircles]);
 
   const baseCoin = signal.symbol.replace(/USDT$/, "");
   const isLong = signal.side === "LONG";
@@ -1117,7 +1121,23 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
         <div className="grid gap-3 @5xl:grid-cols-[1fr_280px]">
           <div
             ref={chartWrapRef}
-            className="relative h-[480px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden"
+            onClick={() => chartMenu && setChartMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const rect = chartWrapRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              const localX = Math.min(rect.width - 190, Math.max(8, e.clientX - rect.left));
+              const localY = Math.min(rect.height - 190, Math.max(8, e.clientY - rect.top));
+              let price = null;
+              try {
+                price = seriesRef.current?.coordinateToPrice(e.clientY - rect.top) ?? null;
+              } catch {
+                price = null;
+              }
+              setChartMenu({ x: localX, y: localY, price });
+            }}
+            className="relative h-[480px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden select-none"
           >
             <div ref={chartElRef} className="absolute inset-0" />
             <canvas
@@ -1127,6 +1147,96 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
             {!candles.length && (
               <div className="absolute inset-0 flex items-center justify-center text-[12px] text-fog-2">
                 Loading chart…
+              </div>
+            )}
+
+            {/* Custom Chart Right-Click Context Menu */}
+            {chartMenu && (
+              <div
+                style={{ left: chartMenu.x, top: chartMenu.y }}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute z-30 w-48 rounded-xl border border-white/[0.12] bg-[#131417]/95 backdrop-blur-md p-1.5 shadow-2xl text-[12px]"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    chartRef.current?.timeScale().fitContent();
+                    chartRef.current?.priceScale("right").applyOptions({ autoScale: true });
+                    setChartMenu(null);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-snow hover:bg-white/[0.06]"
+                >
+                  Reset chart view
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    chartRef.current?.timeScale().scrollToRealTime();
+                    setChartMenu(null);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-snow hover:bg-white/[0.06]"
+                >
+                  Jump to latest
+                </button>
+                {chartMenu.price > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        const line = seriesRef.current?.createPriceLine({
+                          price: chartMenu.price,
+                          title: "LINE",
+                          color: "#e6c97a",
+                          lineStyle: LineStyle.Dashed,
+                          lineWidth: 1,
+                          lineVisible: true,
+                          axisLabelVisible: true,
+                        });
+                        if (line) {
+                          customLinesRef.current.push(line);
+                          setCustomLinesCount(customLinesRef.current.length);
+                        }
+                      } catch {
+                        /* ignore */
+                      }
+                      setChartMenu(null);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-mint hover:bg-white/[0.06] cw-num"
+                  >
+                    + Add line @ {fmtPrice(chartMenu.price)}
+                  </button>
+                )}
+                {customLinesCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      for (const l of customLinesRef.current) {
+                        try {
+                          seriesRef.current?.removePriceLine(l);
+                        } catch {
+                          /* ignore */
+                        }
+                      }
+                      customLinesRef.current = [];
+                      setCustomLinesCount(0);
+                      setChartMenu(null);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-coral hover:bg-white/[0.06]"
+                  >
+                    Remove custom lines ({customLinesCount})
+                  </button>
+                )}
+                <div className="my-1 border-t border-white/[0.06]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEntrySl((v) => !v);
+                    setChartMenu(null);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-fog hover:text-snow hover:bg-white/[0.06]"
+                >
+                  {showEntrySl ? "Hide Entry / SL lines" : "Show Entry / SL lines"}
+                </button>
               </div>
             )}
           </div>

@@ -68,6 +68,26 @@ export default function App() {
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
 
+  // Disable browser right-click / Inspect globally; custom chart menu handles its own right-click
+  useEffect(() => {
+    const blockContext = (e) => e.preventDefault();
+    const blockKeys = (e) => {
+      if (
+        e.key === "F12" ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && ["I", "J", "C"].includes(e.key.toUpperCase())) ||
+        ((e.ctrlKey || e.metaKey) && e.key.toUpperCase() === "U")
+      ) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("contextmenu", blockContext);
+    document.addEventListener("keydown", blockKeys);
+    return () => {
+      document.removeEventListener("contextmenu", blockContext);
+      document.removeEventListener("keydown", blockKeys);
+    };
+  }, []);
+
   // Market detail + modal state
   const [selectedCoin, setSelectedCoinState] = useState(null);
   const [returnNav, setReturnNav] = useState("pump_dump");
