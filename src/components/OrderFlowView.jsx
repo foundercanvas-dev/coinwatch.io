@@ -7,11 +7,13 @@ import {
   ArrowLeft,
   ShieldCheck,
   Lightning,
+  ShieldWarning,
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
 import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
 import { fmtPrice, fmtUsd, fmtTime } from "../lib/format";
 import {
+  analyzeDomHeatmap,
   computeAtr14,
   computeDeltaAndCVD,
   computeHvnProfile,
@@ -271,15 +273,28 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   );
 }
 
+function precisionFor(p) {
+  if (!p) return 2;
+  if (p >= 1000) return 2;
+  if (p >= 1) return 4;
+  if (p >= 0.01) return 5;
+  if (p >= 0.0001) return 7;
+  return 8;
+}
+
 /**
  * Clean Chart View for a selected Order Flow Signal:
- * - Only Candlestick chart + 10% opacity Absorption circles at recent swing highs/lows
+ * - Real-time Candlestick chart + 10% opacity Absorption circles at recent swing highs/lows
  * - Entry / SL / TP lines strictly from Risk Setup
+ * - MBO DOM Heatmap side panel (100ms depth + Wall + Spoof alerts)
  */
 function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav }) {
   const [candles, setCandles] = useState([]);
   const [absorptions, setAbsorptions] = useState([signal]);
   const [live, setLive] = useState(false);
+  const [lastPrice, setLastPrice] = useState(signal.price || 0);
+  const [dom, setDom] = useState({ bids: [], asks: [], buyWalls: [], sellWalls: [], spoofs: [] });
+  const [spoofLog, setSpoofLog] = useState([]);
 
   const chartWrapRef = useRef(null);
   const chartElRef = useRef(null);
@@ -289,6 +304,8 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
   const priceLinesRef = useRef([]);
   const candlesRef = useRef([]);
   const absorptionsRef = useRef([signal]);
+  const wallTrackerRef = useRef(new Map());
+  const seededRef = useRef(false);
 
   const drawAbsorptionCircles = useCallback(() => {
     const canvas = overlayCanvasRef.current;
@@ -338,6 +355,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
   // Init clean candlestick chart
   useEffect(() => {
     if (!chartElRef.current) return;
+    const prec = precisionFor(signal.price);
     const chart = createChart(chartElRef.current, {
       autoSize: true,
       layout: {
@@ -356,6 +374,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
         timeVisible: true,
         secondsVisible: false,
         barSpacing: 9,
+        rightOffset: 4,
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -370,6 +389,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
       borderVisible: false,
       wickUpColor: "#7ee6a3",
       wickDownColor: "#f2707c",
+      priceFormat: { type: "price", precision: prec, minMove: Math.pow(10, -prec) },
     });
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
@@ -381,31 +401,51 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
 
     chartRef.current = chart;
     seriesRef.current = series;
+    seededRef.current = false;
 
     return () => {
       ro.disconnect();
       chart.remove();
     };
-  }, [drawAbsorptionCircles]);
+  }, [drawAbsorptionCircles, signal.price]);
 
-  // Load klines + live WS stream for the selected symbol
+  // Load klines + depth + combined live WebSocket (aggTrade + depth20@100ms + kline)
   useEffect(() => {
     let alive = true;
     const sym = signal.symbol;
+    const symLower = sym.toLowerCase();
+    wallTrackerRef.current.clear();
+    setSpoofLog([]);
+    seededRef.current = false;
+
     const load = async () => {
       try {
-        const rows = await fetch(
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=160`,
-        ).then((r) => r.json());
+        const [klineRows, depthData] = await Promise.all([
+          fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=160`).then((r) => r.json()),
+          fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=500`).then((r) => r.json()),
+        ]);
         if (!alive) return;
-        const parsed = parseBinanceKlines(rows);
+        const parsed = parseBinanceKlines(klineRows);
         candlesRef.current = parsed;
         setCandles(parsed);
+        if (parsed.length) setLastPrice(parsed[parsed.length - 1].close);
         const hvn = computeHvnProfile(parsed, 50);
         const abs = detectAbsorptionSignals(parsed, sym, hvn);
         const list = abs.length ? abs : [signal];
         absorptionsRef.current = list;
         setAbsorptions(list);
+
+        if (depthData?.bids) {
+          setDom(
+            analyzeDomHeatmap(
+              depthData.bids,
+              depthData.asks,
+              wallTrackerRef.current,
+              Date.now(),
+              parsed[parsed.length - 1]?.close || signal.price,
+            ),
+          );
+        }
       } catch {
         /* ignore */
       }
@@ -413,34 +453,86 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     load();
 
     const ws = new WebSocket(
-      `wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${timeframe}`,
+      `wss://fstream.binance.com/stream?streams=${symLower}@aggTrade/${symLower}@depth20@100ms/${symLower}@kline_${timeframe}`,
     );
     ws.onopen = () => alive && setLive(true);
     ws.onmessage = (evt) => {
       if (!alive) return;
       try {
-        const data = JSON.parse(evt.data);
-        const k = data.k;
-        if (!k) return;
-        const t = Math.floor(Number(k.t) / 1000) + TZ_SHIFT;
-        const vol = Number(k.v);
-        const buyVol = Number(k.V);
-        const bar = {
-          time: t,
-          open: Number(k.o),
-          high: Number(k.h),
-          low: Number(k.l),
-          close: Number(k.c),
-          volume: vol,
-          buyVol,
-          sellVol: Math.max(0, vol - buyVol),
-        };
-        const list = candlesRef.current;
-        const idx = list.findIndex((b) => b.time === t);
-        const updated =
-          idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-180);
-        candlesRef.current = updated;
-        setCandles(updated);
+        const msg = JSON.parse(evt.data);
+        const stream = msg.stream || "";
+        const data = msg.data;
+        if (!data) return;
+
+        if (stream.endsWith("@aggTrade")) {
+          const price = Number(data.p);
+          const qty = Number(data.q);
+          const isSell = Boolean(data.m);
+          if (!(price > 0)) return;
+          setLastPrice(price);
+          const list = candlesRef.current;
+          if (list.length) {
+            const last = { ...list[list.length - 1] };
+            last.close = price;
+            if (price > last.high) last.high = price;
+            if (price < last.low) last.low = price;
+            last.volume += qty;
+            if (isSell) last.sellVol += qty;
+            else last.buyVol += qty;
+            candlesRef.current = [...list.slice(0, -1), last];
+            try {
+              seriesRef.current?.update(last);
+              requestAnimationFrame(drawAbsorptionCircles);
+            } catch {
+              /* ignore */
+            }
+          }
+        } else if (stream.includes("@depth20")) {
+          const curPrice = candlesRef.current[candlesRef.current.length - 1]?.close || signal.price;
+          const analyzed = analyzeDomHeatmap(
+            data.b || data.bids,
+            data.a || data.asks,
+            wallTrackerRef.current,
+            Date.now(),
+            curPrice,
+          );
+          setDom(analyzed);
+          if (analyzed.spoofs.length) {
+            setSpoofLog((prev) => [...analyzed.spoofs, ...prev].slice(0, 6));
+          }
+        } else if (stream.includes("@kline_")) {
+          const k = data.k;
+          if (!k) return;
+          const t = Math.floor(Number(k.t) / 1000) + TZ_SHIFT;
+          const vol = Number(k.v);
+          const buyVol = Number(k.V);
+          const bar = {
+            time: t,
+            open: Number(k.o),
+            high: Number(k.h),
+            low: Number(k.l),
+            close: Number(k.c),
+            volume: vol,
+            buyVol,
+            sellVol: Math.max(0, vol - buyVol),
+          };
+          setLastPrice(bar.close);
+          const list = candlesRef.current;
+          const idx = list.findIndex((b) => b.time === t);
+          const updated =
+            idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-180);
+          candlesRef.current = updated;
+          if (idx >= 0 || k.x) {
+            try {
+              seriesRef.current?.update(bar);
+              requestAnimationFrame(drawAbsorptionCircles);
+            } catch {
+              setCandles(updated);
+            }
+          } else {
+            setCandles(updated);
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -451,7 +543,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
       alive = false;
       ws.close();
     };
-  }, [signal, timeframe]);
+  }, [signal, timeframe, drawAbsorptionCircles]);
 
   // Risk Setup Trade Plan (mandatory)
   const tradePlan = useMemo(() => {
@@ -604,22 +696,119 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
         )}
       </section>
 
-      {/* Clean Candlestick Chart with 10% Opacity Absorption Circle Overlay */}
+      {/* Clean Candlestick Chart with 10% Opacity Absorption Circle Overlay + MBO DOM Side Panel */}
       <section className="cw-panel p-3 md:p-4">
-        <div
-          ref={chartWrapRef}
-          className="relative h-[480px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden"
-        >
-          <div ref={chartElRef} className="absolute inset-0" />
-          <canvas
-            ref={overlayCanvasRef}
-            className="pointer-events-none absolute inset-0 z-10 w-full h-full"
-          />
-          {!candles.length && (
-            <div className="absolute inset-0 flex items-center justify-center text-[12px] text-fog-2">
-              Loading chart…
+        <div className="grid gap-3 @5xl:grid-cols-[1fr_280px]">
+          <div
+            ref={chartWrapRef}
+            className="relative h-[480px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden"
+          >
+            <div ref={chartElRef} className="absolute inset-0" />
+            <canvas
+              ref={overlayCanvasRef}
+              className="pointer-events-none absolute inset-0 z-10 w-full h-full"
+            />
+            {!candles.length && (
+              <div className="absolute inset-0 flex items-center justify-center text-[12px] text-fog-2">
+                Loading chart…
+              </div>
+            )}
+          </div>
+
+          {/* MBO DOM Heatmap Side Panel */}
+          <div className="rounded-xl border border-white/[0.06] bg-[#0b0c0f] flex flex-col h-[480px] overflow-hidden">
+            <div className="px-3 py-2.5 border-b border-white/[0.05] flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[12px] font-semibold text-snow">MBO DOM</div>
+                <div className="text-[10px] text-fog-2">100ms · Wall ≥ 3x</div>
+              </div>
+              {spoofLog.length > 0 ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-terminal-yellow/15 border border-terminal-yellow/35 text-terminal-yellow text-[10px] font-semibold">
+                  <ShieldWarning weight="fill" className="w-3 h-3" /> SPOOF ({spoofLog.length})
+                </span>
+              ) : (
+                <span className={`text-[10px] ${dom.bids.length ? "text-mint" : "text-fog-2"}`}>
+                  {dom.bids.length ? "Live" : "Syncing"}
+                </span>
+              )}
             </div>
-          )}
+
+            <div className="grid grid-cols-3 px-2.5 py-1.5 text-[10px] text-fog-2 border-b border-white/[0.05]">
+              <span>Price</span>
+              <span className="text-right">Size</span>
+              <span className="text-right">Wall</span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto cw-num text-[11px] flex flex-col justify-between">
+              <div>
+                {dom.asks.slice(-11).map((a) => (
+                  <div key={`a-${a.price}`} className="relative grid grid-cols-3 px-2.5 py-1 items-center">
+                    <span
+                      className="absolute inset-y-0 right-0 pointer-events-none"
+                      style={{
+                        width: `${Math.round(a.intensity * 100)}%`,
+                        background: a.isWall
+                          ? "rgba(242, 112, 124, 0.34)"
+                          : "rgba(242, 112, 124, 0.12)",
+                      }}
+                    />
+                    <span className="relative text-coral">{fmtPrice(a.price)}</span>
+                    <span className="relative text-right text-snow">{a.qty.toFixed(2)}</span>
+                    <span className="relative text-right">
+                      {a.isWall ? (
+                        <span className="text-[9px] px-1 rounded bg-coral/25 text-coral font-semibold">
+                          {a.ratio}x
+                        </span>
+                      ) : (
+                        <span className="text-fog-2 text-[10px]">{fmtUsd(a.usd)}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="px-2.5 py-1.5 border-y border-white/[0.06] bg-white/[0.02] flex items-center justify-between">
+                <span className="text-[13px] font-semibold text-mint">{fmtPrice(lastPrice)}</span>
+                <span className="text-[10px] text-fog-2">MID</span>
+              </div>
+
+              <div>
+                {dom.bids.slice(0, 11).map((b) => (
+                  <div key={`b-${b.price}`} className="relative grid grid-cols-3 px-2.5 py-1 items-center">
+                    <span
+                      className="absolute inset-y-0 right-0 pointer-events-none"
+                      style={{
+                        width: `${Math.round(b.intensity * 100)}%`,
+                        background: b.isWall
+                          ? "rgba(126, 230, 163, 0.34)"
+                          : "rgba(126, 230, 163, 0.12)",
+                      }}
+                    />
+                    <span className="relative text-mint">{fmtPrice(b.price)}</span>
+                    <span className="relative text-right text-snow">{b.qty.toFixed(2)}</span>
+                    <span className="relative text-right">
+                      {b.isWall ? (
+                        <span className="text-[9px] px-1 rounded bg-mint/25 text-mint font-semibold">
+                          {b.ratio}x
+                        </span>
+                      ) : (
+                        <span className="text-fog-2 text-[10px]">{fmtUsd(b.usd)}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {spoofLog.length > 0 && (
+              <div className="px-2.5 py-1.5 border-t border-terminal-yellow/25 bg-terminal-yellow/[0.05] flex items-center justify-between text-[10px] cw-num">
+                <span className="text-terminal-yellow font-medium">
+                  Spoof {spoofLog[0].side} @ {fmtPrice(spoofLog[0].price)}
+                </span>
+                <span className="text-fog-2">{(spoofLog[0].ageMs / 1000).toFixed(1)}s</span>
+              </div>
+            )}
+          </div>
         </div>
       </section>
     </div>
