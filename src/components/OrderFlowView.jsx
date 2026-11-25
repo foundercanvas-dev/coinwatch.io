@@ -38,9 +38,23 @@ const WATCH_SYMBOLS = [
 
 const TIMEFRAMES = [
   { value: "1m", label: "1m" },
+  { value: "3m", label: "3m" },
   { value: "5m", label: "5m" },
   { value: "15m", label: "15m" },
+  { value: "1h", label: "1h" },
+  { value: "4h", label: "4h" },
+  { value: "1d", label: "1d" },
 ];
+
+const IV_SEC = {
+  "1m": 60,
+  "3m": 180,
+  "5m": 300,
+  "15m": 900,
+  "1h": 3600,
+  "4h": 14400,
+  "1d": 86400,
+};
 
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
 
@@ -289,6 +303,7 @@ function precisionFor(p) {
  * - MBO DOM Heatmap side panel (100ms depth + Wall + Spoof alerts)
  */
 function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav }) {
+  const [chartIv, setChartIv] = useState(timeframe || "5m");
   const [candles, setCandles] = useState([]);
   const [absorptions, setAbsorptions] = useState([signal]);
   const [live, setLive] = useState(false);
@@ -414,6 +429,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     let alive = true;
     const sym = signal.symbol;
     const symLower = sym.toLowerCase();
+    const ivSec = IV_SEC[chartIv] || 300;
     wallTrackerRef.current.clear();
     setSpoofLog([]);
     seededRef.current = false;
@@ -421,7 +437,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     const load = async () => {
       try {
         const [klineRows, depthData] = await Promise.all([
-          fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=160`).then((r) => r.json()),
+          fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${chartIv}&limit=180`).then((r) => r.json()),
           fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=500`).then((r) => r.json()),
         ]);
         if (!alive) return;
@@ -452,98 +468,163 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     };
     load();
 
-    const ws = new WebSocket(
-      `wss://fstream.binance.com/stream?streams=${symLower}@aggTrade/${symLower}@depth20@100ms/${symLower}@kline_${timeframe}`,
-    );
-    ws.onopen = () => alive && setLive(true);
-    ws.onmessage = (evt) => {
+    let ws = null;
+    let reconnectTimer = null;
+    const connect = () => {
       if (!alive) return;
-      try {
-        const msg = JSON.parse(evt.data);
-        const stream = msg.stream || "";
-        const data = msg.data;
-        if (!data) return;
+      ws = new WebSocket(
+        `wss://fstream.binance.com/stream?streams=${symLower}@aggTrade/${symLower}@depth20@100ms/${symLower}@kline_${chartIv}`,
+      );
+      ws.onopen = () => alive && setLive(true);
+      ws.onmessage = (evt) => {
+        if (!alive) return;
+        try {
+          const msg = JSON.parse(evt.data);
+          const stream = msg.stream || "";
+          const data = msg.data;
+          if (!data) return;
 
-        if (stream.endsWith("@aggTrade")) {
-          const price = Number(data.p);
-          const qty = Number(data.q);
-          const isSell = Boolean(data.m);
-          if (!(price > 0)) return;
-          setLastPrice(price);
+          if (stream.endsWith("@aggTrade")) {
+            const price = Number(data.p);
+            const qty = Number(data.q);
+            const isSell = Boolean(data.m);
+            const tradeSec = Math.floor(Number(data.T || Date.now()) / 1000);
+            const bucketTime = Math.floor(tradeSec / ivSec) * ivSec + TZ_SHIFT;
+            if (!(price > 0)) return;
+            setLastPrice(price);
+            const list = candlesRef.current;
+            if (list.length) {
+              const last = list[list.length - 1];
+              if (bucketTime > last.time) {
+                const newBar = {
+                  time: bucketTime,
+                  open: last.close,
+                  high: Math.max(last.close, price),
+                  low: Math.min(last.close, price),
+                  close: price,
+                  volume: qty,
+                  buyVol: isSell ? 0 : qty,
+                  sellVol: isSell ? qty : 0,
+                };
+                candlesRef.current = [...list, newBar].slice(-200);
+                try {
+                  seriesRef.current?.update(newBar);
+                  requestAnimationFrame(drawAbsorptionCircles);
+                } catch {
+                  /* ignore */
+                }
+              } else if (bucketTime === last.time) {
+                const updatedLast = {
+                  ...last,
+                  close: price,
+                  high: Math.max(last.high, price),
+                  low: Math.min(last.low, price),
+                  volume: last.volume + qty,
+                  buyVol: last.buyVol + (isSell ? 0 : qty),
+                  sellVol: last.sellVol + (isSell ? qty : 0),
+                };
+                candlesRef.current = [...list.slice(0, -1), updatedLast];
+                try {
+                  seriesRef.current?.update(updatedLast);
+                  requestAnimationFrame(drawAbsorptionCircles);
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+          } else if (stream.includes("@depth20")) {
+            const curPrice = candlesRef.current[candlesRef.current.length - 1]?.close || signal.price;
+            const analyzed = analyzeDomHeatmap(
+              data.b || data.bids,
+              data.a || data.asks,
+              wallTrackerRef.current,
+              Date.now(),
+              curPrice,
+            );
+            setDom(analyzed);
+            if (analyzed.spoofs.length) {
+              setSpoofLog((prev) => [...analyzed.spoofs, ...prev].slice(0, 6));
+            }
+          } else if (stream.includes("@kline_")) {
+            const k = data.k;
+            if (!k) return;
+            const t = Math.floor(Number(k.t) / 1000) + TZ_SHIFT;
+            const vol = Number(k.v);
+            const buyVol = Number(k.V);
+            const bar = {
+              time: t,
+              open: Number(k.o),
+              high: Number(k.h),
+              low: Number(k.l),
+              close: Number(k.c),
+              volume: vol,
+              buyVol,
+              sellVol: Math.max(0, vol - buyVol),
+            };
+            setLastPrice(bar.close);
+            const list = candlesRef.current;
+            const last = list[list.length - 1];
+            if (!last || t >= last.time) {
+              const idx = list.findIndex((b) => b.time === t);
+              const updated =
+                idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-200);
+              candlesRef.current = updated;
+              try {
+                seriesRef.current?.update(bar);
+                requestAnimationFrame(drawAbsorptionCircles);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onclose = () => {
+        if (!alive) return;
+        setLive(false);
+        reconnectTimer = setTimeout(connect, 2500);
+      };
+      ws.onerror = () => ws?.close();
+    };
+    connect();
+
+    // Periodic lightweight REST sync so bars never stall
+    const syncTimer = setInterval(async () => {
+      try {
+        const rows = await fetch(
+          `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${chartIv}&limit=5`,
+        ).then((r) => r.json());
+        if (!alive) return;
+        const fresh = parseBinanceKlines(rows);
+        for (const bar of fresh) {
           const list = candlesRef.current;
-          if (list.length) {
-            const last = { ...list[list.length - 1] };
-            last.close = price;
-            if (price > last.high) last.high = price;
-            if (price < last.low) last.low = price;
-            last.volume += qty;
-            if (isSell) last.sellVol += qty;
-            else last.buyVol += qty;
-            candlesRef.current = [...list.slice(0, -1), last];
+          const last = list[list.length - 1];
+          if (!last || bar.time >= last.time) {
+            const idx = list.findIndex((b) => b.time === bar.time);
+            candlesRef.current =
+              idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-200);
             try {
-              seriesRef.current?.update(last);
-              requestAnimationFrame(drawAbsorptionCircles);
+              seriesRef.current?.update(bar);
             } catch {
               /* ignore */
             }
           }
-        } else if (stream.includes("@depth20")) {
-          const curPrice = candlesRef.current[candlesRef.current.length - 1]?.close || signal.price;
-          const analyzed = analyzeDomHeatmap(
-            data.b || data.bids,
-            data.a || data.asks,
-            wallTrackerRef.current,
-            Date.now(),
-            curPrice,
-          );
-          setDom(analyzed);
-          if (analyzed.spoofs.length) {
-            setSpoofLog((prev) => [...analyzed.spoofs, ...prev].slice(0, 6));
-          }
-        } else if (stream.includes("@kline_")) {
-          const k = data.k;
-          if (!k) return;
-          const t = Math.floor(Number(k.t) / 1000) + TZ_SHIFT;
-          const vol = Number(k.v);
-          const buyVol = Number(k.V);
-          const bar = {
-            time: t,
-            open: Number(k.o),
-            high: Number(k.h),
-            low: Number(k.l),
-            close: Number(k.c),
-            volume: vol,
-            buyVol,
-            sellVol: Math.max(0, vol - buyVol),
-          };
-          setLastPrice(bar.close);
-          const list = candlesRef.current;
-          const idx = list.findIndex((b) => b.time === t);
-          const updated =
-            idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-180);
-          candlesRef.current = updated;
-          if (idx >= 0 || k.x) {
-            try {
-              seriesRef.current?.update(bar);
-              requestAnimationFrame(drawAbsorptionCircles);
-            } catch {
-              setCandles(updated);
-            }
-          } else {
-            setCandles(updated);
-          }
         }
+        requestAnimationFrame(drawAbsorptionCircles);
       } catch {
         /* ignore */
       }
-    };
-    ws.onclose = () => alive && setLive(false);
+    }, 12000);
 
     return () => {
       alive = false;
-      ws.close();
+      clearTimeout(reconnectTimer);
+      clearInterval(syncTimer);
+      ws?.close();
     };
-  }, [signal, timeframe, drawAbsorptionCircles]);
+  }, [signal, chartIv, drawAbsorptionCircles]);
 
   // Risk Setup Trade Plan (mandatory)
   const tradePlan = useMemo(() => {
@@ -645,9 +726,15 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             {baseCoin}/USDT
           </span>
         }
-        description={`${signal.side} Absorption at recent swing ${isLong ? "low" : "high"} · ${timeframe} Binance Perpetual`}
+        description={`${signal.side} Absorption at recent swing ${isLong ? "low" : "high"} · ${chartIv} Binance Perpetual`}
         actions={
           <>
+            <Segmented
+              size="sm"
+              value={chartIv}
+              onChange={setChartIv}
+              options={TIMEFRAMES}
+            />
             <button onClick={onBack} className="cw-btn !h-9">
               <ArrowLeft weight="bold" className="w-4 h-4" /> Back to signals
             </button>
