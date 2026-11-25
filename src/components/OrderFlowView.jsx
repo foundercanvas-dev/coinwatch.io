@@ -681,7 +681,6 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
       const specs = [
         ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid],
         ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid],
-        ...(tradePlan.tp1 > 0 ? [["TP", tradePlan.tp1, "#7ee6a3", LineStyle.Dashed]] : []),
       ];
       for (const [title, price, color, lineStyle] of specs) {
         if (!(price > 0)) continue;
@@ -762,11 +761,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
           </div>
         ) : (
           tradePlan && (
-            <div className="grid grid-cols-2 @3xl:grid-cols-5 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
+            <div className="grid grid-cols-2 @3xl:grid-cols-4 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
               {[
                 ["Entry", tradePlan.entry, "accent"],
                 ["Stop loss", tradePlan.stop, "down"],
-                ["Take profit", tradePlan.tp1, "up"],
                 ["Position size", fmtUsd(tradePlan.positionUsd), "default"],
                 ["Max risk", fmtUsd(tradePlan.riskUsd), "muted"],
               ].map(([label, value, tone]) => (

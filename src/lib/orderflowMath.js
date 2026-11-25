@@ -284,6 +284,16 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
 
     // Buyer Absorption at Recent Swing Low (LONG)
     if (atRecentLow && sellVol > buyVol * 1.1 && next.close >= cur.close * 0.9992) {
+      // Skip if SL (cur.low) was already broken by any subsequent candle
+      let stoppedOut = false;
+      for (let j = i + 1; j < candles.length; j++) {
+        if (candles[j].low <= cur.low) {
+          stoppedOut = true;
+          break;
+        }
+      }
+      if (stoppedOut) continue;
+
       const score = Math.min(99, baseScore + (deltaFlippedUp ? 8 : 0));
       signals.push({
         id: `abs-long-${symbol}-${cur.time}`,
@@ -305,6 +315,16 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
         reason: `Sell flow absorbed at recent swing low (${cur.low.toFixed(2)})`,
       });
     } else if (atRecentHigh && buyVol > sellVol * 1.1 && next.close <= cur.close * 1.0008) {
+      // Skip if SL (cur.high) was already broken by any subsequent candle
+      let stoppedOut = false;
+      for (let j = i + 1; j < candles.length; j++) {
+        if (candles[j].high >= cur.high) {
+          stoppedOut = true;
+          break;
+        }
+      }
+      if (stoppedOut) continue;
+
       // Seller Absorption at Recent Swing High (SHORT)
       const score = Math.min(99, baseScore + (deltaFlippedDown ? 8 : 0));
       signals.push({
