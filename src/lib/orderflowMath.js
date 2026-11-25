@@ -240,7 +240,12 @@ export function buildFootprintLevels(trades, tickSize, minImbalanceVol = 5) {
  * - At a recent High: High Buy volume absorbed with price stalling => Seller Absorption (SHORT)
  * Confluence with HVN and Delta flip boosts signal score in the background.
  */
-export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile = null, { includeStopped = false } = {}) {
+export function detectAbsorptionSignals(
+  candles,
+  symbol = "BTCUSDT",
+  hvnProfile = null,
+  { includeStopped = false, includeLive = false } = {},
+) {
   if (!Array.isArray(candles) || candles.length < 15) return [];
   const avgVol =
     candles.slice(-40).reduce((s, c) => s + Number(c.volume || 0), 0) /
@@ -251,8 +256,9 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
   const latestClose = candles[candles.length - 1]?.close || 0;
   let lastLongIdx = -99;
   let lastShortIdx = -99;
+  const endIdx = includeLive ? candles.length : candles.length - 1;
 
-  for (let i = lookback; i < candles.length - 1; i++) {
+  for (let i = lookback; i < endIdx; i++) {
     const cur = candles[i];
     const prev = candles[i - 1];
     const next = candles[Math.min(candles.length - 1, i + 2)];

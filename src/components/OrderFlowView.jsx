@@ -698,8 +698,11 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
           });
         }
         const hvn = computeHvnProfile(parsed, 50);
-        const allAbs = detectAbsorptionSignals(parsed, sym, hvn, { includeStopped: true });
-        const list = allAbs.length ? allAbs : chartIv === signal.timeframe ? [signal] : [];
+        const allAbs = detectAbsorptionSignals(parsed, sym, hvn, { includeStopped: true, includeLive: true });
+        const list = [...allAbs];
+        if (chartIv === signal.timeframe && !list.some((s) => s.time === signal.time && s.side === signal.side)) {
+          list.unshift(signal);
+        }
         absorptionsRef.current = list;
         setAbsorptions(list);
 
@@ -835,11 +838,13 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
               candlesRef.current = updated;
               if (k.x) {
                 const hvn = computeHvnProfile(updated, 50);
-                const allAbs = detectAbsorptionSignals(updated, sym, hvn, { includeStopped: true });
-                if (allAbs.length) {
-                  absorptionsRef.current = allAbs;
-                  setAbsorptions(allAbs);
+                const allAbs = detectAbsorptionSignals(updated, sym, hvn, { includeStopped: true, includeLive: true });
+                const list = [...allAbs];
+                if (chartIv === signal.timeframe && !list.some((s) => s.time === signal.time && s.side === signal.side)) {
+                  list.unshift(signal);
                 }
+                absorptionsRef.current = list;
+                setAbsorptions(list);
               }
               try {
                 seriesRef.current?.update(bar);
@@ -885,11 +890,13 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
           }
         }
         const hvn = computeHvnProfile(candlesRef.current, 50);
-        const allAbs = detectAbsorptionSignals(candlesRef.current, sym, hvn, { includeStopped: true });
-        if (allAbs.length) {
-          absorptionsRef.current = allAbs;
-          setAbsorptions(allAbs);
+        const allAbs = detectAbsorptionSignals(candlesRef.current, sym, hvn, { includeStopped: true, includeLive: true });
+        const list = [...allAbs];
+        if (chartIv === signal.timeframe && !list.some((s) => s.time === signal.time && s.side === signal.side)) {
+          list.unshift(signal);
         }
+        absorptionsRef.current = list;
+        setAbsorptions(list);
         requestAnimationFrame(drawAbsorptionCircles);
       } catch {
         /* ignore */
@@ -985,10 +992,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
 
   const setupClosed = isStoppedOut || Boolean(reversalSignal);
 
-  // Update chart candles + ONLY Entry/SL lines (removed when stopped out or reversed) + redraw circles
+  // Seed chart data ONLY ONCE per load/timeframe so live series.update() never gets overwritten
   useEffect(() => {
     const series = seriesRef.current;
-    if (!series || !candles.length) return;
+    if (!series || !candles.length || seededRef.current) return;
 
     const seen = new Set();
     const clean = [];
@@ -999,9 +1006,17 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
     }
     try {
       series.setData(clean);
+      seededRef.current = true;
     } catch {
       /* ignore */
     }
+    requestAnimationFrame(drawAbsorptionCircles);
+  }, [candles, drawAbsorptionCircles]);
+
+  // Update ONLY Entry/SL lines (removed when stopped out or reversed) + redraw circles
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
 
     for (const line of priceLinesRef.current) {
       try {
@@ -1037,7 +1052,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
     }
     priceLinesRef.current = lines;
     requestAnimationFrame(drawAbsorptionCircles);
-  }, [candles, tradePlan, setupClosed, showEntrySl, absorptions, drawAbsorptionCircles]);
+  }, [tradePlan, setupClosed, showEntrySl, absorptions, drawAbsorptionCircles]);
 
   const baseCoin = signal.symbol.replace(/USDT$/, "");
   const isLong = signal.side === "LONG";
@@ -1308,7 +1323,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
               }
               setChartMenu({ x: localX, y: localY, price });
             }}
-            className="relative h-[480px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden select-none"
+            className="relative h-[600px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden select-none"
           >
             <div ref={chartElRef} className="absolute inset-0" />
             <canvas
@@ -1412,9 +1427,9 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
             )}
           </div>
 
-          {/* Order Book Side Panel */}
-          <div className="rounded-xl border border-white/[0.06] bg-[#0b0c0f] flex flex-col h-[480px] overflow-hidden">
-            <div className="px-3 py-2.5 border-b border-white/[0.05] flex items-center justify-between gap-2">
+          {/* Order Book Side Panel (full height, zero scroll) */}
+          <div className="rounded-xl border border-white/[0.06] bg-[#0b0c0f] flex flex-col h-[600px] overflow-hidden">
+            <div className="px-3 py-2.5 border-b border-white/[0.05] flex items-center justify-between gap-2 shrink-0">
               <div>
                 <div className="text-[12px] font-semibold text-snow">Order Book</div>
                 <div className="text-[10px] text-fog-2">Live depth &amp; big orders</div>
@@ -1430,15 +1445,15 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
               )}
             </div>
 
-            <div className="grid grid-cols-3 px-2.5 py-1.5 text-[10px] text-fog-2 border-b border-white/[0.05]">
+            <div className="grid grid-cols-3 px-2.5 py-1.5 text-[10px] text-fog-2 border-b border-white/[0.05] shrink-0">
               <span>Price</span>
               <span className="text-right">Size</span>
               <span className="text-right">Value</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto cw-num text-[11px] flex flex-col justify-between">
+            <div className="flex-1 overflow-hidden cw-num text-[11px] flex flex-col justify-between">
               <div>
-                {dom.asks.slice(-11).map((a) => (
+                {dom.asks.slice(-10).map((a) => (
                   <div key={`a-${a.price}`} className="relative grid grid-cols-3 px-2.5 py-1 items-center">
                     <span
                       className="absolute inset-y-0 right-0 pointer-events-none"
@@ -1464,13 +1479,13 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
                 ))}
               </div>
 
-              <div className="px-2.5 py-1.5 border-y border-white/[0.06] bg-white/[0.02] flex items-center justify-between">
+              <div className="px-2.5 py-1.5 border-y border-white/[0.06] bg-white/[0.02] flex items-center justify-between shrink-0">
                 <span className="text-[13px] font-semibold text-mint">{fmtPrice(lastPrice)}</span>
                 <span className="text-[10px] text-fog-2">MID</span>
               </div>
 
               <div>
-                {dom.bids.slice(0, 11).map((b) => (
+                {dom.bids.slice(0, 10).map((b) => (
                   <div key={`b-${b.price}`} className="relative grid grid-cols-3 px-2.5 py-1 items-center">
                     <span
                       className="absolute inset-y-0 right-0 pointer-events-none"
