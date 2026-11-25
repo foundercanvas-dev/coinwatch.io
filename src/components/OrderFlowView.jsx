@@ -215,9 +215,8 @@ export default function OrderFlowView({
   const scanMarkets = useCallback(async () => {
     setScanning(true);
     try {
-      const allSymbols = await fetchLiquidFuturesSymbols();
+      const symbols = await fetchLiquidFuturesSymbols();
       const targetTfs = timeframe === "all" ? ALL_SCAN_TFS : [timeframe];
-      const symbols = timeframe === "all" ? allSymbols.slice(0, 28) : allSymbols;
       setWatchedCount(symbols.length);
 
       let totalInflowUsd = 0;
@@ -232,7 +231,7 @@ export default function OrderFlowView({
         }
       }
 
-      const batchSize = 20;
+      const batchSize = 32;
       for (let i = 0; i < jobs.length; i += batchSize) {
         const batch = jobs.slice(i, i + batchSize);
         const results = await Promise.allSettled(
