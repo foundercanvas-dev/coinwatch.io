@@ -8,6 +8,8 @@ import {
   ShieldCheck,
   Lightning,
   ShieldWarning,
+  Bell,
+  BellSlash,
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
 import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
@@ -382,11 +384,30 @@ export default function OrderFlowView({
               <button
                 type="button"
                 onClick={onTogglePopups}
-                className={`cw-btn !h-9 !px-3 !text-[12px] ${
-                  popupsEnabled ? "!border-mint/35 !text-mint" : "!text-fog-2"
+                aria-pressed={popupsEnabled}
+                title={popupsEnabled ? "Turn off popup notifications" : "Turn on popup notifications"}
+                className={`cw-btn !h-9 !px-3 gap-2.5 ${
+                  popupsEnabled ? "!border-mint/30 !bg-mint/[0.06] !text-snow" : "!text-fog"
                 }`}
               >
-                Popups: {popupsEnabled ? "On" : "Off"}
+                {popupsEnabled ? (
+                  <Bell weight="fill" className="w-4 h-4 text-mint" />
+                ) : (
+                  <BellSlash weight="duotone" className="w-4 h-4 text-fog-2" />
+                )}
+                <span className="text-[12px] font-medium">Alerts</span>
+                <span
+                  aria-hidden="true"
+                  className={`relative w-7 h-4 rounded-full transition-colors ${
+                    popupsEnabled ? "bg-mint" : "bg-white/10"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${
+                      popupsEnabled ? "left-3.5 bg-ink" : "left-0.5 bg-fog"
+                    }`}
+                  />
+                </span>
               </button>
             )}
             <LivePill isConnected={!scanning || signals.length > 0} />
