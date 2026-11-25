@@ -9,7 +9,9 @@ import MarketDetail from "./components/MarketDetail";
 import useLiveMarket from "./lib/useLiveMarket";
 import POAModal from "./components/POAModal";
 import CorrelationView from "./components/CorrelationView";
-import OrderFlowView from "./components/OrderFlowView";
+import OrderFlowView, { fetchOrderFlowNewSignals } from "./components/OrderFlowView";
+import CoinIcon from "./components/CoinIcon";
+import { fmtPrice } from "./lib/format";
 import { rewardRatioFor, SENSITIVITY_POLICY } from "./lib/signalPolicy";
 
 export default function App() {
@@ -389,6 +391,51 @@ export default function App() {
     if (fresh) playAlertSound();
   }, [engine.live, backendLive]);
 
+  // Global 8-second popup notification whenever a new Order Flow setup arrives (works on any tab)
+  const [orderFlowToast, setOrderFlowToast] = useState(null);
+  const [pendingOrderFlowSignal, setPendingOrderFlowSignal] = useState(null);
+  const seenOrderFlowIdsRef = React.useRef(new Set());
+  const orderFlowSeededRef = React.useRef(false);
+  const orderFlowToastTimerRef = React.useRef(null);
+
+  const notifyOrderFlow = React.useCallback((list) => {
+    if (!Array.isArray(list) || !list.length) return;
+    if (!orderFlowSeededRef.current) {
+      for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
+      orderFlowSeededRef.current = true;
+      return;
+    }
+    const freshSig = list.find((s) => !seenOrderFlowIdsRef.current.has(s.id));
+    for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
+    if (!freshSig) return;
+
+    setOrderFlowToast(freshSig);
+    playAlertSound();
+    if (orderFlowToastTimerRef.current) clearTimeout(orderFlowToastTimerRef.current);
+    orderFlowToastTimerRef.current = setTimeout(() => {
+      setOrderFlowToast(null);
+    }, 8000);
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "order_flow") return undefined;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const list = await fetchOrderFlowNewSignals();
+        if (alive) notifyOrderFlow(list);
+      } catch {
+        /* ignore */
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 22000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [activeNav, notifyOrderFlow]);
+
   return (
     <div className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden bg-ink text-snow font-sans antialiased">
       <Sidebar
@@ -434,6 +481,9 @@ export default function App() {
             <OrderFlowView
               risk={risk}
               setActiveNav={setActiveNav}
+              initialSignal={pendingOrderFlowSignal}
+              onConsumedInitialSignal={() => setPendingOrderFlowSignal(null)}
+              onNewSignals={notifyOrderFlow}
             />
           )}
 
@@ -475,6 +525,60 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {orderFlowToast && (
+        <div className="fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl border border-mint/35 space-y-3">
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <CoinIcon
+                symbol={orderFlowToast.symbol}
+                coin={orderFlowToast.symbol.replace(/USDT$/, "")}
+                exchange="binance"
+                className="w-8 h-8 shrink-0"
+                isPump={orderFlowToast.side === "LONG"}
+              />
+              <div className="min-w-0">
+                <div className="text-[12px] font-semibold text-mint">
+                  New Order Flow Setup
+                </div>
+                <div className="text-[13px] font-semibold text-snow truncate">
+                  {orderFlowToast.symbol.replace(/USDT$/, "")}/USDT ·{" "}
+                  <span className={orderFlowToast.side === "LONG" ? "text-mint" : "text-coral"}>
+                    {orderFlowToast.side}
+                  </span>{" "}
+                  <span className="text-[11px] text-fog-2 uppercase">
+                    ({orderFlowToast.timeframe})
+                  </span>
+                </div>
+                <div className="text-[11px] text-fog-2 cw-num">
+                  Level: {fmtPrice(orderFlowToast.price)}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOrderFlowToast(null)}
+              className="text-fog-2 hover:text-snow text-[13px] px-1"
+              aria-label="Close notification"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPendingOrderFlowSignal(orderFlowToast);
+                setOrderFlowToast(null);
+                setActiveNav("order_flow");
+              }}
+              className="cw-btn cw-btn-primary !h-8 !px-3 !text-[11px] flex-1"
+            >
+              Open Order Flow
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

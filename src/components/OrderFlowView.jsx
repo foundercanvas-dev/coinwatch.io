@@ -107,6 +107,40 @@ const NEW_WINDOW_SEC = {
 
 const newWindowFor = (tf) => NEW_WINDOW_SEC[tf] || 600;
 
+export async function fetchOrderFlowNewSignals() {
+  const symbols = (await fetchLiquidFuturesSymbols()).slice(0, 18);
+  const tfs = ["1m", "5m", "15m", "1h"];
+  const nowS = Math.floor(Date.now() / 1000);
+  const fresh = [];
+  const jobs = [];
+  for (const tf of tfs) {
+    for (const sym of symbols) jobs.push({ sym, tf });
+  }
+  const batchSize = 18;
+  for (let i = 0; i < jobs.length; i += batchSize) {
+    const batch = jobs.slice(i, i + batchSize);
+    const results = await Promise.allSettled(
+      batch.map(async ({ sym, tf }) => {
+        const rows = await fetch(
+          `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=80`,
+        ).then((r) => r.json());
+        const candles = parseBinanceKlines(rows);
+        if (candles.length < 20) return [];
+        const hvn = computeHvnProfile(candles, 50);
+        const atr14 = computeAtr14(candles);
+        const abs = detectAbsorptionSignals(candles, sym, hvn, { includeLive: true });
+        return abs
+          .filter((s) => nowS - (s.time - TZ_SHIFT) <= newWindowFor(tf))
+          .map((s) => ({ ...s, timeframe: tf, atr14 }));
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && Array.isArray(r.value)) fresh.push(...r.value);
+    }
+  }
+  return fresh.sort((a, b) => b.time - a.time);
+}
+
 function formatCountdown(sec) {
   const s = Math.max(0, Math.floor(sec));
   const h = Math.floor(s / 3600);
@@ -143,7 +177,13 @@ function formatCompactNum(n) {
   return String(Math.round(v));
 }
 
-export default function OrderFlowView({ risk, setActiveNav }) {
+export default function OrderFlowView({
+  risk,
+  setActiveNav,
+  initialSignal,
+  onConsumedInitialSignal,
+  onNewSignals,
+}) {
   const [timeframe, setTimeframe] = useState("all");
   const [tab, setTab] = useState("new"); // new | active | history
   const [watchedCount, setWatchedCount] = useState(FALLBACK_SYMBOLS.length);
@@ -151,9 +191,16 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   const [historySignals, setHistorySignals] = useState([]);
   const [flowStats, setFlowStats] = useState({ inflowUsd: 0, outflowUsd: 0 });
   const [scanning, setScanning] = useState(true);
-  const [selectedSignal, setSelectedSignal] = useState(null);
+  const [selectedSignal, setSelectedSignal] = useState(initialSignal || null);
   const [sideFilter, setSideFilter] = useState("all");
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    if (initialSignal) {
+      setSelectedSignal(initialSignal);
+      onConsumedInitialSignal?.();
+    }
+  }, [initialSignal, onConsumedInitialSignal]);
 
   useEffect(() => {
     const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
@@ -270,8 +317,12 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         };
       });
 
-      setSignals(enrichedActive.sort((a, b) => b.time - a.time));
+      const sorted = enrichedActive.sort((a, b) => b.time - a.time);
+      setSignals(sorted);
       setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 60));
+      const nowS = Math.floor(Date.now() / 1000);
+      const freshNew = sorted.filter((s) => nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe));
+      if (freshNew.length) onNewSignals?.(freshNew);
     } catch {
       /* keep previous signals */
     } finally {
