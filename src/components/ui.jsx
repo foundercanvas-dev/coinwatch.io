@@ -119,11 +119,38 @@ export function Segmented({ options, value, onChange, size = 'md', className = '
   );
 }
 
-/** Connection pill. */
-export function LivePill({ isConnected, label }) {
+/** Connection pill with live signal strength bars and latency (ms). */
+export function LivePill({ isConnected, label, latencyMs }) {
+  const [measuredMs, setMeasuredMs] = useState(null);
+
+  useEffect(() => {
+    if (latencyMs != null || !isConnected) return undefined;
+    let alive = true;
+    const probe = async () => {
+      const t0 = performance.now();
+      try {
+        await fetch('https://fapi.binance.com/fapi/v1/time');
+        if (alive) setMeasuredMs(Math.max(1, Math.round(performance.now() - t0)));
+      } catch {
+        /* ignore */
+      }
+    };
+    probe();
+    const id = setInterval(probe, 15000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [isConnected, latencyMs]);
+
+  const ms = latencyMs != null ? Math.round(latencyMs) : measuredMs;
+  const bars = !isConnected || ms == null ? 0 : ms < 150 ? 4 : ms < 350 ? 3 : ms < 700 ? 2 : 1;
+  const barTone =
+    bars >= 3 ? 'bg-mint' : bars === 2 ? 'bg-terminal-yellow' : 'bg-coral';
+
   return (
     <span
-      title={label}
+      title={label || (ms != null ? `Latency: ${ms}ms` : undefined)}
       className={`inline-flex items-center gap-2 h-8 px-3 rounded-full border text-[11px] font-semibold tracking-[0.08em] uppercase ${
         isConnected ? 'border-mint/30 text-mint bg-mint/[0.06]' : 'border-white/10 text-fog bg-white/[0.02]'
       }`}
@@ -132,7 +159,23 @@ export function LivePill({ isConnected, label }) {
         {isConnected && <span className="absolute inset-0 rounded-full bg-mint animate-ping opacity-70" />}
         <span className={`relative w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-mint' : 'bg-fog-2'}`} />
       </span>
-      {isConnected ? 'Live' : 'Connecting'}
+      <span>{isConnected ? 'Live' : 'Connecting'}</span>
+      {isConnected && ms != null && (
+        <span className="inline-flex items-center gap-1.5 pl-1 border-l border-mint/20 tracking-normal">
+          <span className="inline-flex items-end gap-[2px] h-2.5" aria-hidden="true">
+            {[4, 6, 8, 10].map((h, i) => (
+              <span
+                key={h}
+                style={{ height: `${h}px` }}
+                className={`w-[2px] rounded-full ${i < bars ? barTone : 'bg-white/15'}`}
+              />
+            ))}
+          </span>
+          <span className="cw-num text-[10.5px] font-medium lowercase text-snow/85">
+            {ms}ms
+          </span>
+        </span>
+      )}
     </span>
   );
 }
