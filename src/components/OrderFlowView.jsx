@@ -120,7 +120,7 @@ function formatCompactNum(n) {
 
 export default function OrderFlowView({ risk, setActiveNav }) {
   const [timeframe, setTimeframe] = useState("5m");
-  const [tab, setTab] = useState("active"); // active | history
+  const [tab, setTab] = useState("new"); // new | active | history
   const [watchedCount, setWatchedCount] = useState(FALLBACK_SYMBOLS.length);
   const [signals, setSignals] = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
@@ -128,6 +128,12 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   const [scanning, setScanning] = useState(true);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [sideFilter, setSideFilter] = useState("all");
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 10000);
+    return () => clearInterval(t);
+  }, []);
 
   // Background scanner across all liquid Binance Futures pairs (batched to avoid rate limits)
   const scanMarkets = useCallback(async () => {
@@ -185,13 +191,17 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
       setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
 
-      // Keep latest active signal per symbol
+      // Keep latest active signal per symbol; any older superseded signal moves to History
       const bySym = new Map();
       for (const s of activeMerged.sort((a, b) => b.time - a.time)) {
-        if (!bySym.has(s.symbol)) bySym.set(s.symbol, s);
+        if (!bySym.has(s.symbol)) {
+          bySym.set(s.symbol, s);
+        } else {
+          historyMerged.push({ ...s, expired: true });
+        }
       }
       setSignals([...bySym.values()].sort((a, b) => b.time - a.time));
-      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 40));
+      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 50));
     } catch {
       /* keep previous signals */
     } finally {
@@ -218,7 +228,11 @@ export default function OrderFlowView({ risk, setActiveNav }) {
     );
   }
 
-  const sourceList = tab === "active" ? signals : historySignals;
+  const newWindowSec = Math.max(300, (IV_SEC[timeframe] || 300) * 4);
+  const newSignals = signals.filter((s) => nowSec - (s.time - TZ_SHIFT) <= newWindowSec);
+  const activeSignals = signals.filter((s) => nowSec - (s.time - TZ_SHIFT) > newWindowSec);
+  const sourceList =
+    tab === "new" ? newSignals : tab === "active" ? activeSignals : historySignals;
   const visibleSignals = sourceList.filter(
     (s) => sideFilter === "all" || s.side === sideFilter.toUpperCase(),
   );
@@ -280,12 +294,22 @@ export default function OrderFlowView({ risk, setActiveNav }) {
       {/* Compact Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="Watched Pairs" value={watchedCount} caption="Live market feed" />
-        <StatCard label="Active Setups" value={signals.length} caption={`${timeframe} timeframe`} highlight />
-        <StatCard label="Buy Setups" value={longCount} caption="Near recent lows" tone="up" />
-        <StatCard label="Sell Setups" value={shortCount} caption="Near recent highs" tone="down" />
+        <StatCard
+          label="New Setups"
+          value={newSignals.length}
+          caption={`Within ${Math.round(newWindowSec / 60)}m window`}
+          highlight
+        />
+        <StatCard label="Active Setups" value={activeSignals.length} caption="Open until SL / new signal" />
+        <StatCard
+          label="Buy / Sell"
+          value={`${longCount} / ${shortCount}`}
+          caption="Live directional split"
+          tone={longCount >= shortCount ? "up" : "down"}
+        />
       </div>
 
-      {/* Filter Bar + Active / History */}
+      {/* Filter Bar + New / Active / History */}
       <section className="cw-panel p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Segmented
@@ -293,7 +317,8 @@ export default function OrderFlowView({ risk, setActiveNav }) {
             value={tab}
             onChange={setTab}
             options={[
-              { value: "active", label: "Active", badge: signals.length },
+              { value: "new", label: "New", badge: newSignals.length },
+              { value: "active", label: "Active", badge: activeSignals.length },
               { value: "history", label: "History", badge: historySignals.length },
             ]}
           />
@@ -343,9 +368,14 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
                   <div className="text-right shrink-0 flex flex-col items-end gap-1">
                     <div className="flex items-center gap-1.5">
-                      {(sig.stoppedOut || sig.reversed) && (
+                      {tab === "new" && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-mint/15 text-mint">
+                          NEW
+                        </span>
+                      )}
+                      {(sig.stoppedOut || sig.reversed || sig.expired) && (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/[0.06] text-fog">
-                          {sig.reversed ? "Reversed" : "Stopped out"}
+                          {sig.reversed ? "Reversed" : sig.stoppedOut ? "Stopped out" : "Expired"}
                         </span>
                       )}
                       <span
@@ -388,10 +418,14 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           {!visibleSignals.length && (
             <div className="col-span-full py-14 text-center text-[12px] text-fog-2">
               {tab === "history"
-                ? "No stopped-out setups in history yet."
-                : scanning
-                  ? "Looking for clean setups at recent highs and lows…"
-                  : "No active setups right now. Check back shortly."}
+                ? "No closed or expired setups in history yet."
+                : tab === "new"
+                  ? scanning
+                    ? "Scanning for fresh setups…"
+                    : `No new setups within the last ${Math.round(newWindowSec / 60)}m window — check Active.`
+                  : scanning
+                    ? "Looking for active setups…"
+                    : "No active setups right now."}
             </div>
           )}
         </div>
