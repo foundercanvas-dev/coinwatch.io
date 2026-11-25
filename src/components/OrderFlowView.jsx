@@ -1158,10 +1158,60 @@ function OrderFlowSignalChart({
     requestAnimationFrame(drawAbsorptionCircles);
   }, [candles, drawAbsorptionCircles]);
 
-  // Redraw circles whenever setups update
+  // Plot ENTRY / SL lines on the chart (removed automatically if stopped out or reversed) + redraw circles
   useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+
+    for (const line of priceLinesRef.current) {
+      try {
+        series.removePriceLine(line);
+      } catch {
+        /* ignore */
+      }
+    }
+    const lines = [];
+    if (tfSetup && !setupClosed && showEntrySl) {
+      const entryPrice =
+        tradePlan?.entry ||
+        calculateSmartEntry({
+          triggerClose: tfSetup.triggerClose || tfSetup.price,
+          open: tfSetup.open,
+          high: tfSetup.high,
+          low: tfSetup.low,
+          side: tfSetup.side,
+          atrAbs: tfAtr14,
+          currentPrice: lastPrice || tfSetup.price,
+          entryMode: risk?.entryMode || "retest",
+        });
+      const stopPrice =
+        tradePlan?.stop || (tfSetup.side === "SHORT" ? tfSetup.high : tfSetup.low);
+      const specs = [
+        ["ENTRY", entryPrice, "#a3d9c4", LineStyle.Solid],
+        ["SL", stopPrice, "#f2707c", LineStyle.Solid],
+      ];
+      for (const [title, price, color, lineStyle] of specs) {
+        if (!(price > 0)) continue;
+        try {
+          lines.push(
+            series.createPriceLine({
+              price,
+              title,
+              color,
+              lineStyle,
+              lineWidth: 2,
+              lineVisible: true,
+              axisLabelVisible: true,
+            }),
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    priceLinesRef.current = lines;
     requestAnimationFrame(drawAbsorptionCircles);
-  }, [absorptions, drawAbsorptionCircles]);
+  }, [tfSetup, tradePlan, tfAtr14, lastPrice, risk?.entryMode, setupClosed, showEntrySl, absorptions, drawAbsorptionCircles]);
 
   const baseCoin = signal.symbol.replace(/USDT$/, "");
   const isLong = signal.side === "LONG";
@@ -1459,6 +1509,17 @@ function OrderFlowSignalChart({
                     Remove custom lines ({customLinesCount})
                   </button>
                 )}
+                <div className="my-1 border-t border-white/[0.06]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEntrySl((v) => !v);
+                    setChartMenu(null);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-fog hover:text-snow hover:bg-white/[0.06]"
+                >
+                  {showEntrySl ? "Hide Entry / SL lines" : "Show Entry / SL lines"}
+                </button>
               </div>
             )}
           </div>
