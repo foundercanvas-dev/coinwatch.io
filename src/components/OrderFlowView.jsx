@@ -21,7 +21,7 @@ import {
 } from "../lib/orderflowMath";
 import { calculateSmartEntry, calculateTradePlan } from "../lib/tradeMath";
 
-const WATCH_SYMBOLS = [
+const FALLBACK_SYMBOLS = [
   "BTCUSDT",
   "ETHUSDT",
   "SOLUSDT",
@@ -35,6 +35,41 @@ const WATCH_SYMBOLS = [
   "ARBUSDT",
   "OPUSDT",
 ];
+
+let cachedFuturesSymbols = null;
+let cachedSymbolsAt = 0;
+
+async function fetchLiquidFuturesSymbols() {
+  if (cachedFuturesSymbols && Date.now() - cachedSymbolsAt < 300_000) {
+    return cachedFuturesSymbols;
+  }
+  try {
+    const tickers = await fetch("https://fapi.binance.com/fapi/v1/ticker/24hr").then((r) =>
+      r.json(),
+    );
+    if (Array.isArray(tickers)) {
+      const liquid = tickers
+        .filter(
+          (t) =>
+            typeof t.symbol === "string" &&
+            t.symbol.endsWith("USDT") &&
+            !t.symbol.includes("_") &&
+            Number(t.quoteVolume) >= 5_000_000,
+        )
+        .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
+        .slice(0, 80)
+        .map((t) => t.symbol);
+      if (liquid.length >= 12) {
+        cachedFuturesSymbols = liquid;
+        cachedSymbolsAt = Date.now();
+        return liquid;
+      }
+    }
+  } catch {
+    /* fallback below */
+  }
+  return FALLBACK_SYMBOLS;
+}
 
 const TIMEFRAMES = [
   { value: "1m", label: "1m" },
@@ -86,6 +121,7 @@ function formatCompactNum(n) {
 export default function OrderFlowView({ risk, setActiveNav }) {
   const [timeframe, setTimeframe] = useState("5m");
   const [tab, setTab] = useState("active"); // active | history
+  const [watchedCount, setWatchedCount] = useState(FALLBACK_SYMBOLS.length);
   const [signals, setSignals] = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
   const [flowStats, setFlowStats] = useState({ inflowUsd: 0, outflowUsd: 0 });
@@ -93,61 +129,69 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [sideFilter, setSideFilter] = useState("all");
 
-  // Background scanner across liquid Binance Futures pairs (all math runs silently)
+  // Background scanner across all liquid Binance Futures pairs (batched to avoid rate limits)
   const scanMarkets = useCallback(async () => {
     setScanning(true);
     try {
+      const symbols = await fetchLiquidFuturesSymbols();
+      setWatchedCount(symbols.length);
+
       let totalInflowUsd = 0;
       let totalOutflowUsd = 0;
-
-      const results = await Promise.allSettled(
-        WATCH_SYMBOLS.map(async (sym) => {
-          const rows = await fetch(
-            `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=120`,
-          ).then((r) => r.json());
-          const candles = parseBinanceKlines(rows);
-          if (candles.length < 20) return [];
-
-          // Sum recent 12 candles buy/sell USD flow for live Inflow / Outflow cards
-          for (const c of candles.slice(-12)) {
-            totalInflowUsd += (c.buyVol || 0) * c.close;
-            totalOutflowUsd += (c.sellVol || 0) * c.close;
-          }
-
-          const hvn = computeHvnProfile(candles, 50);
-          const { divergence } = computeDeltaAndCVD(candles);
-          const atr14 = computeAtr14(candles);
-          const abs = detectAbsorptionSignals(candles, sym, hvn, { includeStopped: true });
-
-          return abs.map((sig) => ({
-            ...sig,
-            timeframe,
-            atr14,
-            hasCvdDivergence: Boolean(divergence && divergence.side === sig.side),
-            score: Math.min(99, sig.score + (divergence && divergence.side === sig.side ? 5 : 0)),
-          }));
-        }),
-      );
-
-      setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
-
       const activeMerged = [];
       const historyMerged = [];
-      for (const res of results) {
-        if (res.status === "fulfilled" && Array.isArray(res.value)) {
-          for (const s of res.value) {
-            if (s.stoppedOut || s.reversed) historyMerged.push(s);
-            else activeMerged.push(s);
+
+      const batchSize = 16;
+      for (let i = 0; i < symbols.length; i += batchSize) {
+        const batch = symbols.slice(i, i + batchSize);
+        const results = await Promise.allSettled(
+          batch.map(async (sym) => {
+            const rows = await fetch(
+              `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${timeframe}&limit=120`,
+            ).then((r) => r.json());
+            const candles = parseBinanceKlines(rows);
+            if (candles.length < 20) return [];
+
+            // Sum recent 12 candles buy/sell USD flow for live Inflow / Outflow cards
+            for (const c of candles.slice(-12)) {
+              totalInflowUsd += (c.buyVol || 0) * c.close;
+              totalOutflowUsd += (c.sellVol || 0) * c.close;
+            }
+
+            const hvn = computeHvnProfile(candles, 50);
+            const { divergence } = computeDeltaAndCVD(candles);
+            const atr14 = computeAtr14(candles);
+            const abs = detectAbsorptionSignals(candles, sym, hvn, { includeStopped: true });
+
+            return abs.map((sig) => ({
+              ...sig,
+              timeframe,
+              atr14,
+              hasCvdDivergence: Boolean(divergence && divergence.side === sig.side),
+              score: Math.min(99, sig.score + (divergence && divergence.side === sig.side ? 5 : 0)),
+            }));
+          }),
+        );
+
+        for (const res of results) {
+          if (res.status === "fulfilled" && Array.isArray(res.value)) {
+            for (const s of res.value) {
+              if (s.stoppedOut || s.reversed) historyMerged.push(s);
+              else activeMerged.push(s);
+            }
           }
         }
       }
+
+      setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
+
       // Keep latest active signal per symbol
       const bySym = new Map();
       for (const s of activeMerged.sort((a, b) => b.time - a.time)) {
         if (!bySym.has(s.symbol)) bySym.set(s.symbol, s);
       }
       setSignals([...bySym.values()].sort((a, b) => b.time - a.time));
-      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 30));
+      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 40));
     } catch {
       /* keep previous signals */
     } finally {
@@ -235,7 +279,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
       {/* Compact Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Watched Pairs" value={WATCH_SYMBOLS.length} caption="Live market feed" />
+        <StatCard label="Watched Pairs" value={watchedCount} caption="Live market feed" />
         <StatCard label="Active Setups" value={signals.length} caption={`${timeframe} timeframe`} highlight />
         <StatCard label="Buy Setups" value={longCount} caption="Near recent lows" tone="up" />
         <StatCard label="Sell Setups" value={shortCount} caption="Near recent highs" tone="down" />
