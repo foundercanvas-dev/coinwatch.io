@@ -1151,46 +1151,10 @@ function OrderFlowSignalChart({
     requestAnimationFrame(drawAbsorptionCircles);
   }, [candles, drawAbsorptionCircles]);
 
-  // Update ONLY Entry/SL lines (removed when stopped out or reversed) + redraw circles
+  // Redraw circles whenever setups update
   useEffect(() => {
-    const series = seriesRef.current;
-    if (!series) return;
-
-    for (const line of priceLinesRef.current) {
-      try {
-        series.removePriceLine(line);
-      } catch {
-        /* ignore */
-      }
-    }
-    const lines = [];
-    if (tradePlan && !setupClosed && showEntrySl) {
-      const specs = [
-        ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid],
-        ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid],
-      ];
-      for (const [title, price, color, lineStyle] of specs) {
-        if (!(price > 0)) continue;
-        try {
-          lines.push(
-            series.createPriceLine({
-              price,
-              title,
-              color,
-              lineStyle,
-              lineWidth: 2,
-              lineVisible: true,
-              axisLabelVisible: true,
-            }),
-          );
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    priceLinesRef.current = lines;
     requestAnimationFrame(drawAbsorptionCircles);
-  }, [tradePlan, setupClosed, showEntrySl, absorptions, drawAbsorptionCircles]);
+  }, [absorptions, drawAbsorptionCircles]);
 
   const baseCoin = signal.symbol.replace(/USDT$/, "");
   const isLong = signal.side === "LONG";
@@ -1348,80 +1312,8 @@ function OrderFlowSignalChart({
         );
       })()}
 
-      {/* Risk Setup Gate / Trade Plan + Live Volume Bar */}
-      <section className="cw-panel cw-glow p-4 space-y-3">
-        {setupClosed ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-coral/30 bg-coral/[0.06] px-4 py-3">
-            <div className="space-y-0.5">
-              <div className="text-[13px] font-semibold text-coral">
-                {reversalSignal ? `Reversed — Exit ${signal.side}` : "Stopped out"}
-              </div>
-              <div className="text-[11px] text-fog-2">
-                {reversalSignal
-                  ? `Opposite ${reversalSignal.side} setup appeared — Entry & SL removed.`
-                  : "Stop loss level was reached — Entry & SL removed from chart."}
-              </div>
-            </div>
-            {reversalSignal ? (
-              <button
-                type="button"
-                onClick={() => onSwitchSignal?.({ ...reversalSignal, timeframe: chartIv, atr14: signal.atr14 })}
-                className="cw-btn cw-btn-primary !h-8 !px-3 !text-[11px]"
-              >
-                Switch to {reversalSignal.side}
-              </button>
-            ) : (
-              <button type="button" onClick={onBack} className="cw-btn !h-8 !px-3 !text-[11px]">
-                Back to Scanner
-              </button>
-            )}
-          </div>
-        ) : !risk?.configured ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#0b0c0f] px-4 py-3">
-            <div className="space-y-0.5">
-              <div className="text-[13px] font-medium text-snow">Risk setup required</div>
-              <div className="text-[11px] text-fog-2">
-                Set your Balance &amp; Risk % in Settings first to calculate Entry, Stop Loss, and Position Size.
-              </div>
-            </div>
-            <button
-              onClick={() => setActiveNav?.("settings")}
-              className="cw-btn cw-btn-primary !h-8 !px-3.5 !text-[12px] shrink-0"
-            >
-              <ShieldCheck weight="duotone" className="w-4 h-4" /> Setup Risk
-            </button>
-          </div>
-        ) : !tfSetup ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#0b0c0f] px-4 py-3">
-            <div className="space-y-0.5">
-              <div className="text-[13px] font-medium text-snow">No active setup on {chartIv}</div>
-              <div className="text-[11px] text-fog-2">
-                Showing past setup circles on the chart so you can see how previous levels reacted.
-              </div>
-            </div>
-          </div>
-        ) : (
-          tradePlan && (
-            <div className="grid grid-cols-2 @3xl:grid-cols-4 gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06]">
-              {[
-                ["Entry", tradePlan.entry, "accent"],
-                ["Stop loss", tradePlan.stop, "down"],
-                ["Position size", fmtUsd(tradePlan.positionUsd), "default"],
-                ["Max risk", fmtUsd(tradePlan.riskUsd), "muted"],
-              ].map(([label, value, tone]) => (
-                <div key={label} className="bg-[#0b0c0f] px-3 py-2.5">
-                  <Metric
-                    label={label}
-                    value={typeof value === "string" ? value : fmtPrice(value)}
-                    tone={tone}
-                  />
-                </div>
-              ))}
-            </div>
-          )
-        )}
-
-        {/* Live Volume Bar below Entry / SL */}
+      {/* Live Buy / Sell Volume Bar */}
+      <section className="cw-panel cw-glow p-3.5">
         {(() => {
           const totalUsd = liveVol.buyUsd + liveVol.sellUsd;
           const buyPct = totalUsd > 0 ? (liveVol.buyUsd / totalUsd) * 100 : 50;
@@ -1429,11 +1321,11 @@ function OrderFlowSignalChart({
           return (
             <div className="relative h-12 overflow-hidden rounded-xl border border-white/[0.07] bg-[#0b0c0f]">
               <div
-                className="absolute inset-y-0 left-0 bg-gradient-to-r from-mint/[0.24] via-mint/[0.13] to-mint/[0.03] transition-[width] duration-300"
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-mint/[0.24] via-mint/[0.13] to-mint/[0.03] transition-[width] duration-150 ease-out"
                 style={{ width: `${buyPct}%` }}
               />
               <div
-                className="absolute inset-y-0 right-0 bg-gradient-to-l from-coral/[0.24] via-coral/[0.13] to-coral/[0.03] transition-[width] duration-300"
+                className="absolute inset-y-0 right-0 bg-gradient-to-l from-coral/[0.24] via-coral/[0.13] to-coral/[0.03] transition-[width] duration-150 ease-out"
                 style={{ width: `${sellPct}%` }}
               />
               <div className="relative flex h-full items-center justify-between gap-2 px-4 text-[12px] cw-num">
@@ -1562,17 +1454,6 @@ function OrderFlowSignalChart({
                     Remove custom lines ({customLinesCount})
                   </button>
                 )}
-                <div className="my-1 border-t border-white/[0.06]" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEntrySl((v) => !v);
-                    setChartMenu(null);
-                  }}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-fog hover:text-snow hover:bg-white/[0.06]"
-                >
-                  {showEntrySl ? "Hide Entry / SL lines" : "Show Entry / SL lines"}
-                </button>
               </div>
             )}
           </div>
