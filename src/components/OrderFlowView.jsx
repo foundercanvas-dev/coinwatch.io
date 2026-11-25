@@ -111,21 +111,21 @@ const NEW_WINDOW_SEC = {
 const newWindowFor = (tf) => NEW_WINDOW_SEC[tf] || 600;
 
 export async function fetchOrderFlowNewSignals() {
-  const symbols = (await fetchLiquidFuturesSymbols()).slice(0, 18);
-  const tfs = ["1m", "5m", "15m", "1h"];
+  const symbols = (await fetchLiquidFuturesSymbols()).slice(0, 12);
+  const tfs = ["5m", "15m"];
   const nowS = Math.floor(Date.now() / 1000);
   const fresh = [];
   const jobs = [];
   for (const tf of tfs) {
     for (const sym of symbols) jobs.push({ sym, tf });
   }
-  const batchSize = 18;
+  const batchSize = 8;
   for (let i = 0; i < jobs.length; i += batchSize) {
     const batch = jobs.slice(i, i + batchSize);
     const results = await Promise.allSettled(
       batch.map(async ({ sym, tf }) => {
         const rows = await fetch(
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=80`,
+          `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=60`,
         ).then((r) => r.json());
         const candles = parseBinanceKlines(rows);
         if (candles.length < 20) return [];
@@ -140,6 +140,7 @@ export async function fetchOrderFlowNewSignals() {
     for (const r of results) {
       if (r.status === "fulfilled" && Array.isArray(r.value)) fresh.push(...r.value);
     }
+    if (i + batchSize < jobs.length) await new Promise((r) => setTimeout(r, 120));
   }
   return fresh.sort((a, b) => b.time - a.time);
 }
@@ -216,8 +217,9 @@ export default function OrderFlowView({
   const scanMarkets = useCallback(async () => {
     setScanning(true);
     try {
-      const symbols = await fetchLiquidFuturesSymbols();
-      const targetTfs = timeframe === "all" ? ALL_SCAN_TFS : [timeframe];
+      const allSymbols = await fetchLiquidFuturesSymbols();
+      const targetTfs = timeframe === "all" ? ["1m", "5m", "15m"] : [timeframe];
+      const symbols = allSymbols.slice(0, 40);
       setWatchedCount(symbols.length);
 
       let totalInflowUsd = 0;
@@ -232,14 +234,19 @@ export default function OrderFlowView({
         }
       }
 
-      const batchSize = 32;
+      const batchSize = 12;
       for (let i = 0; i < jobs.length; i += batchSize) {
         const batch = jobs.slice(i, i + batchSize);
         const results = await Promise.allSettled(
           batch.map(async ({ sym, tf }) => {
-            const rows = await fetch(
-              `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=120`,
+            let rows = await fetch(
+              `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=100`,
             ).then((r) => r.json());
+            if (!Array.isArray(rows)) {
+              rows = await fetch(
+                `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=100`,
+              ).then((r) => r.json());
+            }
             const candles = parseBinanceKlines(rows);
             if (candles.length < 20) return [];
 
@@ -277,6 +284,7 @@ export default function OrderFlowView({
             }
           }
         }
+        if (i + batchSize < jobs.length) await new Promise((r) => setTimeout(r, 120));
       }
 
       setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
@@ -366,7 +374,7 @@ export default function OrderFlowView({
 
   useEffect(() => {
     scanMarkets();
-    const timer = setInterval(scanMarkets, 25000);
+    const timer = setInterval(scanMarkets, 45000);
     return () => clearInterval(timer);
   }, [scanMarkets]);
 
