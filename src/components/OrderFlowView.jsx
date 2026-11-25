@@ -279,17 +279,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         eyebrowIcon={Stack}
         title="Order Flow"
         description="Clean trade setups at key highs and lows. Pick any signal to view Entry, Stop Loss, and live order depth."
-        actions={
-          <>
-            <Segmented
-              size="sm"
-              value={timeframe}
-              onChange={setTimeframe}
-              options={TIMEFRAMES}
-            />
-            <LivePill isConnected={!scanning || signals.length > 0} />
-          </>
-        }
+        actions={<LivePill isConnected={!scanning || signals.length > 0} />}
       />
 
       {/* Live Crypto Inflow / Outflow 2 Cards */}
@@ -339,7 +329,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         />
       </div>
 
-      {/* Filter Bar + New / Active / History */}
+      {/* Filter Bar + New / Active / History + Timeframe + Side */}
       <section className="cw-panel p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Segmented
@@ -352,16 +342,24 @@ export default function OrderFlowView({ risk, setActiveNav }) {
               { value: "history", label: "History", badge: historySignals.length },
             ]}
           />
-          <Segmented
-            size="sm"
-            value={sideFilter}
-            onChange={setSideFilter}
-            options={[
-              { value: "all", label: "All" },
-              { value: "long", label: "Long" },
-              { value: "short", label: "Short" },
-            ]}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              size="sm"
+              value={timeframe}
+              onChange={setTimeframe}
+              options={TIMEFRAMES}
+            />
+            <Segmented
+              size="sm"
+              value={sideFilter}
+              onChange={setSideFilter}
+              options={[
+                { value: "all", label: "All" },
+                { value: "long", label: "Long" },
+                { value: "short", label: "Short" },
+              ]}
+            />
+          </div>
         </div>
 
         <div className="grid gap-3 @3xl:grid-cols-2">
