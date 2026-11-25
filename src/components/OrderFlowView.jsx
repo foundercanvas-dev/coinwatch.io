@@ -210,7 +210,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
             <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-fog">
               <TrendUp weight="bold" className="w-4 h-4 text-mint" /> Crypto Inflow (Live)
             </span>
-            <span className="cw-num text-[12px] font-semibold text-mint">{inflowPct.toFixed(1)}%</span>
+            <span className="cw-num text-[20px] font-bold text-mint">{inflowPct.toFixed(1)}%</span>
           </div>
           <div className="cw-num text-[22px] font-semibold text-snow">{fmtUsd(flowStats.inflowUsd)}</div>
           <div className="h-1.5 w-full rounded-full bg-white/[0.06] overflow-hidden">
@@ -223,7 +223,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
             <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-fog">
               <TrendDown weight="bold" className="w-4 h-4 text-coral" /> Crypto Outflow (Live)
             </span>
-            <span className="cw-num text-[12px] font-semibold text-coral">{outflowPct.toFixed(1)}%</span>
+            <span className="cw-num text-[20px] font-bold text-coral">{outflowPct.toFixed(1)}%</span>
           </div>
           <div className="cw-num text-[22px] font-semibold text-snow">{fmtUsd(flowStats.outflowUsd)}</div>
           <div className="h-1.5 w-full rounded-full bg-white/[0.06] overflow-hidden">
