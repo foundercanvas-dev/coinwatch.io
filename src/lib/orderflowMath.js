@@ -249,6 +249,8 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
   const signals = [];
   const lookback = 12;
   const latestClose = candles[candles.length - 1]?.close || 0;
+  let lastLongIdx = -99;
+  let lastShortIdx = -99;
 
   for (let i = lookback; i < candles.length - 1; i++) {
     const cur = candles[i];
@@ -282,7 +284,8 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
     if (nearHvn) baseScore += 8;
 
     // Buyer Absorption at Recent Swing Low (LONG)
-    if (atRecentLow && sellVol > buyVol * 1.1 && next.close >= cur.close * 0.9992) {
+    if (atRecentLow && sellVol > buyVol * 1.1 && next.close >= cur.close * 0.9992 && i - lastLongIdx >= 5) {
+      lastLongIdx = i;
       let stoppedOut = false;
       for (let j = i + 1; j < candles.length; j++) {
         if (candles[j].low <= cur.low) {
@@ -290,7 +293,6 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
           break;
         }
       }
-      if (stoppedOut && !includeStopped) continue;
 
       const movePct = cur.close > 0 ? ((latestClose - cur.close) / cur.close) * 100 : 0;
       const score = Math.min(99, baseScore + (deltaFlippedUp ? 8 : 0));
@@ -309,13 +311,15 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
         absorbedUsd: Math.round(sellVol * cur.close),
         movePct: +movePct.toFixed(2),
         stoppedOut,
+        reversed: false,
         score,
         nearHvn: Boolean(nearHvn),
         deltaFlip: deltaFlippedUp,
         label: `${Math.round(sellVol)}`,
         reason: `Sell flow absorbed at recent swing low (${cur.low.toFixed(2)})`,
       });
-    } else if (atRecentHigh && buyVol > sellVol * 1.1 && next.close <= cur.close * 1.0008) {
+    } else if (atRecentHigh && buyVol > sellVol * 1.1 && next.close <= cur.close * 1.0008 && i - lastShortIdx >= 5) {
+      lastShortIdx = i;
       let stoppedOut = false;
       for (let j = i + 1; j < candles.length; j++) {
         if (candles[j].high >= cur.high) {
@@ -323,7 +327,6 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
           break;
         }
       }
-      if (stoppedOut && !includeStopped) continue;
 
       const movePct = cur.close > 0 ? ((latestClose - cur.close) / cur.close) * 100 : 0;
       const score = Math.min(99, baseScore + (deltaFlippedDown ? 8 : 0));
@@ -342,6 +345,7 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
         absorbedUsd: Math.round(buyVol * cur.close),
         movePct: +movePct.toFixed(2),
         stoppedOut,
+        reversed: false,
         score,
         nearHvn: Boolean(nearHvn),
         deltaFlip: deltaFlippedDown,
@@ -351,7 +355,20 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
     }
   }
 
-  return signals.slice(-10).reverse();
+  for (let k = 0; k < signals.length; k++) {
+    for (let m = k + 1; m < signals.length; m++) {
+      if (signals[m].side !== signals[k].side) {
+        signals[k].reversed = true;
+        break;
+      }
+    }
+  }
+
+  const filtered = includeStopped
+    ? signals
+    : signals.filter((s) => !s.stoppedOut && !s.reversed);
+
+  return filtered.slice(-10).reverse();
 }
 
 /**

@@ -136,7 +136,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
       for (const res of results) {
         if (res.status === "fulfilled" && Array.isArray(res.value)) {
           for (const s of res.value) {
-            if (s.stoppedOut) historyMerged.push(s);
+            if (s.stoppedOut || s.reversed) historyMerged.push(s);
             else activeMerged.push(s);
           }
         }
@@ -168,6 +168,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         timeframe={timeframe}
         risk={risk}
         onBack={() => setSelectedSignal(null)}
+        onSwitchSignal={(nextSig) => setSelectedSignal(nextSig)}
         setActiveNav={setActiveNav}
       />
     );
@@ -298,9 +299,9 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
                   <div className="text-right shrink-0 flex flex-col items-end gap-1">
                     <div className="flex items-center gap-1.5">
-                      {sig.stoppedOut && (
+                      {(sig.stoppedOut || sig.reversed) && (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/[0.06] text-fog">
-                          Stopped out
+                          {sig.reversed ? "Reversed" : "Stopped out"}
                         </span>
                       )}
                       <span
@@ -370,7 +371,7 @@ function precisionFor(p) {
  * - Entry / SL / TP lines strictly from Risk Setup
  * - MBO DOM Heatmap side panel (100ms depth + Wall + Spoof alerts)
  */
-function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav }) {
+function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal, setActiveNav }) {
   const [chartIv, setChartIv] = useState(timeframe || "5m");
   const [candles, setCandles] = useState([]);
   const [absorptions, setAbsorptions] = useState([signal]);
@@ -379,6 +380,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
   const [liveVol, setLiveVol] = useState({ buyUsd: 0, sellUsd: 0 });
   const [dom, setDom] = useState({ bids: [], asks: [], buyWalls: [], sellWalls: [], spoofs: [] });
   const [spoofLog, setSpoofLog] = useState([]);
+  const [popupDismissedId, setPopupDismissedId] = useState(null);
 
   const chartWrapRef = useRef(null);
   const chartElRef = useRef(null);
@@ -416,25 +418,48 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
       if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) continue;
 
       const isLong = sig.side === "LONG";
-      const radius = 24;
+      const isCurrent = sig.time === signal.time && sig.side === signal.side;
+      const radius = isCurrent ? 25 : 16;
 
-      // 10% opacity fill circle (matching screenshot style in Coinwach branding)
+      // Active setup circle is bright & crisp; past setups are smaller and dimmed
+      if (isCurrent) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = isLong ? "rgba(126, 230, 163, 0.22)" : "rgba(242, 112, 124, 0.22)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = isLong ? "rgba(126, 230, 163, 0.10)" : "rgba(242, 112, 124, 0.10)";
+      ctx.fillStyle = isCurrent
+        ? isLong
+          ? "rgba(126, 230, 163, 0.12)"
+          : "rgba(242, 112, 124, 0.12)"
+        : isLong
+          ? "rgba(126, 230, 163, 0.05)"
+          : "rgba(242, 112, 124, 0.05)";
       ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = isLong ? "rgba(126, 230, 163, 0.65)" : "rgba(242, 112, 124, 0.65)";
+      ctx.lineWidth = isCurrent ? 1.75 : 1;
+      ctx.strokeStyle = isCurrent
+        ? isLong
+          ? "rgba(126, 230, 163, 0.80)"
+          : "rgba(242, 112, 124, 0.80)"
+        : isLong
+          ? "rgba(126, 230, 163, 0.28)"
+          : "rgba(242, 112, 124, 0.28)";
       ctx.stroke();
 
-      // Absorbed volume label inside circle
-      ctx.fillStyle = "#f1f3f1";
-      ctx.font = '600 11px "Funnel Display", sans-serif';
+      // Volume label inside circle
+      ctx.fillStyle = isCurrent ? "#f1f3f1" : "rgba(241, 243, 241, 0.55)";
+      ctx.font = isCurrent
+        ? '600 11px "Funnel Display", sans-serif'
+        : '500 9.5px "Funnel Display", sans-serif';
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(formatCompactNum(sig.absorbedVol), x, y);
     }
-  }, []);
+  }, [signal.time, signal.side]);
 
   // Init clean candlestick chart
   useEffect(() => {
@@ -753,6 +778,12 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     });
   }, [risk, signal, candles]);
 
+  // Detect opposite-side reversal after this signal
+  const reversalSignal = useMemo(() => {
+    const rev = absorptions.find((s) => s.time > signal.time && s.side !== signal.side);
+    return rev || null;
+  }, [absorptions, signal.time, signal.side]);
+
   // Check if SL was hit (either on load or live)
   const isStoppedOut = useMemo(() => {
     if (signal.stoppedOut) return true;
@@ -770,7 +801,25 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     return false;
   }, [signal, tradePlan, lastPrice, candles]);
 
-  // Update chart candles + ONLY Entry/SL lines (removed when stopped out) + redraw circles
+  // Check whether pullback Entry has been filled yet
+  const entryFilled = useMemo(() => {
+    const entryPrice = tradePlan?.entry;
+    if (!(entryPrice > 0)) return false;
+    for (const c of candles) {
+      if (c.time < signal.time) continue;
+      if (signal.side === "LONG" && c.low <= entryPrice) return true;
+      if (signal.side === "SHORT" && c.high >= entryPrice) return true;
+    }
+    if (lastPrice > 0) {
+      if (signal.side === "LONG" && lastPrice <= entryPrice) return true;
+      if (signal.side === "SHORT" && lastPrice >= entryPrice) return true;
+    }
+    return false;
+  }, [tradePlan, candles, signal.time, signal.side, lastPrice]);
+
+  const setupClosed = isStoppedOut || Boolean(reversalSignal);
+
+  // Update chart candles + ONLY Entry/SL lines (removed when stopped out or reversed) + redraw circles
   useEffect(() => {
     const series = seriesRef.current;
     if (!series || !candles.length) return;
@@ -796,7 +845,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
       }
     }
     const lines = [];
-    if (tradePlan && !isStoppedOut) {
+    if (tradePlan && !setupClosed) {
       const specs = [
         ["ENTRY", tradePlan.entry, "#a3d9c4", LineStyle.Solid],
         ["SL", tradePlan.stop, "#f2707c", LineStyle.Solid],
@@ -822,7 +871,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
     }
     priceLinesRef.current = lines;
     requestAnimationFrame(drawAbsorptionCircles);
-  }, [candles, tradePlan, isStoppedOut, absorptions, drawAbsorptionCircles]);
+  }, [candles, tradePlan, setupClosed, absorptions, drawAbsorptionCircles]);
 
   const baseCoin = signal.symbol.replace(/USDT$/, "");
   const isLong = signal.side === "LONG";
@@ -844,7 +893,30 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             {baseCoin}/USDT
           </span>
         }
-        description={`${isLong ? "Buy" : "Sell"} setup near recent ${isLong ? "low" : "high"} · ${chartIv}`}
+        description={
+          <span className="inline-flex items-center gap-2">
+            <span>{`${isLong ? "Buy" : "Sell"} setup near recent ${isLong ? "low" : "high"} · ${chartIv}`}</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                reversalSignal
+                  ? "bg-terminal-yellow/15 text-terminal-yellow"
+                  : isStoppedOut
+                    ? "bg-coral/15 text-coral"
+                    : entryFilled
+                      ? "bg-mint/15 text-mint"
+                      : "bg-white/[0.06] text-fog"
+              }`}
+            >
+              {reversalSignal
+                ? "Reversed"
+                : isStoppedOut
+                  ? "Stopped out"
+                  : entryFilled
+                    ? "Active"
+                    : "Waiting"}
+            </span>
+          </span>
+        }
         actions={
           <>
             <Segmented
@@ -861,16 +933,117 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
         }
       />
 
+      {/* Actionable Popup Notification on Reversal or Signal Close */}
+      {(() => {
+        const activePopupKey = reversalSignal
+          ? `rev-${reversalSignal.id}`
+          : isStoppedOut
+            ? `stop-${signal.id}`
+            : null;
+        if (!activePopupKey || popupDismissedId === activePopupKey) return null;
+
+        return (
+          <div className="fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl border border-white/[0.12] space-y-3">
+            {reversalSignal ? (
+              <>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[13px] font-semibold text-terminal-yellow">
+                      Setup Reversing — Exit {signal.side}
+                    </div>
+                    <p className="mt-1 text-[11px] text-fog-2">
+                      Opposite {reversalSignal.side === "LONG" ? "Buy" : "Sell"} setup triggered at{" "}
+                      <span className="cw-num text-snow">{fmtPrice(reversalSignal.price)}</span>. Exit current trade or switch sides.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPopupDismissedId(activePopupKey)}
+                    className="text-fog-2 hover:text-snow text-[13px] px-1"
+                    aria-label="Dismiss notification"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSwitchSignal?.({ ...reversalSignal, timeframe: chartIv, atr14: signal.atr14 })}
+                    className="cw-btn cw-btn-primary !h-8 !px-3 !text-[11px] flex-1"
+                  >
+                    Switch to {reversalSignal.side} Entry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="cw-btn !h-8 !px-3 !text-[11px]"
+                  >
+                    Back to Scanner
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[13px] font-semibold text-coral">
+                      Signal Closed — Stopped Out
+                    </div>
+                    <p className="mt-1 text-[11px] text-fog-2">
+                      {baseCoin}/USDT reached Stop Loss. This setup has been closed and moved to History.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPopupDismissedId(activePopupKey)}
+                    className="text-fog-2 hover:text-snow text-[13px] px-1"
+                    aria-label="Dismiss notification"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="cw-btn cw-btn-primary !h-8 !px-3 !text-[11px] flex-1"
+                  >
+                    Back to Scanner
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Risk Setup Gate / Trade Plan + Live Volume Bar */}
       <section className="cw-panel cw-glow p-4 space-y-3">
-        {isStoppedOut ? (
+        {setupClosed ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-coral/30 bg-coral/[0.06] px-4 py-3">
             <div className="space-y-0.5">
-              <div className="text-[13px] font-semibold text-coral">Stopped out</div>
+              <div className="text-[13px] font-semibold text-coral">
+                {reversalSignal ? `Reversed — Exit ${signal.side}` : "Stopped out"}
+              </div>
               <div className="text-[11px] text-fog-2">
-                Stop loss level was reached — Entry &amp; SL removed from chart.
+                {reversalSignal
+                  ? `Opposite ${reversalSignal.side} setup appeared — Entry & SL removed.`
+                  : "Stop loss level was reached — Entry & SL removed from chart."}
               </div>
             </div>
+            {reversalSignal ? (
+              <button
+                type="button"
+                onClick={() => onSwitchSignal?.({ ...reversalSignal, timeframe: chartIv, atr14: signal.atr14 })}
+                className="cw-btn cw-btn-primary !h-8 !px-3 !text-[11px]"
+              >
+                Switch to {reversalSignal.side}
+              </button>
+            ) : (
+              <button type="button" onClick={onBack} className="cw-btn !h-8 !px-3 !text-[11px]">
+                Back to Scanner
+              </button>
+            )}
           </div>
         ) : !risk?.configured ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#0b0c0f] px-4 py-3">
