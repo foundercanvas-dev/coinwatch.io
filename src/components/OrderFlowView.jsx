@@ -162,10 +162,10 @@ export default function OrderFlowView({ risk, setActiveNav }) {
   return (
     <div className="space-y-4">
       <PageHeader
-        eyebrow="Order Flow Scanner"
+        eyebrow="Live Signals"
         eyebrowIcon={Stack}
-        title="Order Flow Signals"
-        description="Real-time Order Flow signals detected strictly at recent swing highs & lows using background Delta, CVD & HVN math."
+        title="Order Flow"
+        description="Clean trade setups at key highs and lows. Pick any signal to view Entry, Stop Loss, and live order depth."
         actions={
           <>
             <Segmented
@@ -181,10 +181,10 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
       {/* Compact Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Monitored Futures" value={WATCH_SYMBOLS.length} caption="Binance Perpetuals" />
-        <StatCard label="Active Signals" value={signals.length} caption={`${timeframe} Order Flow`} highlight />
-        <StatCard label="Long Signals" value={longCount} caption="At recent swing lows" tone="up" />
-        <StatCard label="Short Signals" value={shortCount} caption="At recent swing highs" tone="down" />
+        <StatCard label="Watched Pairs" value={WATCH_SYMBOLS.length} caption="Live market feed" />
+        <StatCard label="Active Setups" value={signals.length} caption={`${timeframe} timeframe`} highlight />
+        <StatCard label="Buy Setups" value={longCount} caption="Near recent lows" tone="up" />
+        <StatCard label="Sell Setups" value={shortCount} caption="Near recent highs" tone="down" />
       </div>
 
       {/* Filter Bar */}
@@ -193,7 +193,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           <div className="flex items-center gap-2">
             <Lightning weight="duotone" className="w-4 h-4 text-mint" />
             <span className="text-[13px] font-medium text-snow">
-              Recent High / Low Signals
+              Active Setups
             </span>
           </div>
           <Segmented
@@ -254,19 +254,19 @@ export default function OrderFlowView({ risk, setActiveNav }) {
 
                 <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/[0.05] text-[11px]">
                   <div>
-                    <div className="text-fog-2">Level</div>
+                    <div className="text-fog-2">Price</div>
                     <div className="cw-num text-snow font-medium mt-0.5">{fmtPrice(sig.price)}</div>
                   </div>
                   <div>
-                    <div className="text-fog-2">Flow Vol</div>
+                    <div className="text-fog-2">Volume</div>
                     <div className={`cw-num font-medium mt-0.5 ${isLong ? "text-mint" : "text-coral"}`}>
                       {formatCompactNum(sig.absorbedVol)}
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-fog-2">Confluence</div>
+                    <div className="text-fog-2">Zone</div>
                     <div className="text-snow font-medium mt-0.5">
-                      {sig.nearHvn ? "HVN" : sig.deltaFlip ? "Delta Flip" : "Swing"}
+                      {isLong ? "Recent Low" : "Recent High"}
                     </div>
                   </div>
                 </div>
@@ -277,8 +277,8 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           {!visibleSignals.length && (
             <div className="col-span-full py-14 text-center text-[12px] text-fog-2">
               {scanning
-                ? "Scanning Binance Futures order flow at recent highs & lows…"
-                : "No recent swing high/low signals right now."}
+                ? "Looking for clean setups at recent highs and lows…"
+                : "No active setups right now. Check back shortly."}
             </div>
           )}
         </div>
@@ -711,7 +711,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
   return (
     <div className="space-y-4">
       <PageHeader
-        eyebrow="Order Flow Signal"
+        eyebrow="Trade Setup"
         eyebrowIcon={Stack}
         title={
           <span className="inline-flex items-center gap-3">
@@ -725,7 +725,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             {baseCoin}/USDT
           </span>
         }
-        description={`${signal.side} signal at recent swing ${isLong ? "low" : "high"} · ${chartIv} Binance Perpetual`}
+        description={`${isLong ? "Buy" : "Sell"} setup near recent ${isLong ? "low" : "high"} · ${chartIv}`}
         actions={
           <>
             <Segmented
@@ -749,7 +749,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             <div className="space-y-0.5">
               <div className="text-[13px] font-medium text-snow">Risk setup required</div>
               <div className="text-[11px] text-fog-2">
-                Set your Balance, Risk %, Entry placement &amp; R:R in Settings to plot Entry, SL and TP on the chart.
+                Set your Balance &amp; Risk % in Settings first to calculate Entry, Stop Loss, and Position Size.
               </div>
             </div>
             <button
@@ -800,16 +800,16 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             )}
           </div>
 
-          {/* MBO DOM Heatmap Side Panel */}
+          {/* Order Book Side Panel */}
           <div className="rounded-xl border border-white/[0.06] bg-[#0b0c0f] flex flex-col h-[480px] overflow-hidden">
             <div className="px-3 py-2.5 border-b border-white/[0.05] flex items-center justify-between gap-2">
               <div>
-                <div className="text-[12px] font-semibold text-snow">MBO DOM</div>
-                <div className="text-[10px] text-fog-2">100ms · Wall ≥ 3x</div>
+                <div className="text-[12px] font-semibold text-snow">Order Book</div>
+                <div className="text-[10px] text-fog-2">Live depth &amp; big orders</div>
               </div>
               {spoofLog.length > 0 ? (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-terminal-yellow/15 border border-terminal-yellow/35 text-terminal-yellow text-[10px] font-semibold">
-                  <ShieldWarning weight="fill" className="w-3 h-3" /> SPOOF ({spoofLog.length})
+                  <ShieldWarning weight="fill" className="w-3 h-3" /> Pulled ({spoofLog.length})
                 </span>
               ) : (
                 <span className={`text-[10px] ${dom.bids.length ? "text-mint" : "text-fog-2"}`}>
@@ -821,7 +821,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             <div className="grid grid-cols-3 px-2.5 py-1.5 text-[10px] text-fog-2 border-b border-white/[0.05]">
               <span>Price</span>
               <span className="text-right">Size</span>
-              <span className="text-right">Wall</span>
+              <span className="text-right">Value</span>
             </div>
 
             <div className="flex-1 overflow-y-auto cw-num text-[11px] flex flex-col justify-between">
@@ -888,7 +888,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             {spoofLog.length > 0 && (
               <div className="px-2.5 py-1.5 border-t border-terminal-yellow/25 bg-terminal-yellow/[0.05] flex items-center justify-between text-[10px] cw-num">
                 <span className="text-terminal-yellow font-medium">
-                  Spoof {spoofLog[0].side} @ {fmtPrice(spoofLog[0].price)}
+                  Large order pulled @ {fmtPrice(spoofLog[0].price)}
                 </span>
                 <span className="text-fog-2">{(spoofLog[0].ageMs / 1000).toFixed(1)}s</span>
               </div>
