@@ -817,14 +817,20 @@ function OrderFlowSignalChart({
     setSpoofLog([]);
     seededRef.current = false;
 
-    const load = async () => {
+    const load = async (attempt = 0) => {
       try {
-        const [klineRows, depthData] = await Promise.all([
+        const [klineRes, depthRes] = await Promise.allSettled([
           fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${chartIv}&limit=180`).then((r) => r.json()),
-          fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=500`).then((r) => r.json()),
+          fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=100`).then((r) => r.json()),
         ]);
         if (!alive) return;
+        const klineRows = klineRes.status === "fulfilled" ? klineRes.value : null;
+        const depthData = depthRes.status === "fulfilled" ? depthRes.value : null;
         const parsed = parseBinanceKlines(klineRows);
+        if (!parsed.length && attempt < 2) {
+          setTimeout(() => alive && load(attempt + 1), 1500);
+          return;
+        }
         candlesRef.current = parsed;
         setCandles(parsed);
         if (parsed.length) {
@@ -1097,6 +1103,7 @@ function OrderFlowSignalChart({
   const isStoppedOut = useMemo(() => {
     if (!tfSetup) return false;
     if (tfSetup.stoppedOut) return true;
+    if (!candles.length) return false;
     const stopPrice = tradePlan?.stop || (tfSetup.side === "SHORT" ? tfSetup.high : tfSetup.low);
     if (!(stopPrice > 0)) return false;
     if (lastPrice > 0) {
