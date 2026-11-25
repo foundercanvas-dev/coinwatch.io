@@ -368,7 +368,7 @@ export function detectAbsorptionSignals(candles, symbol = "BTCUSDT", hvnProfile 
     ? signals
     : signals.filter((s) => !s.stoppedOut && !s.reversed);
 
-  return filtered.slice(-10).reverse();
+  return filtered.slice(includeStopped ? -25 : -10).reverse();
 }
 
 /**

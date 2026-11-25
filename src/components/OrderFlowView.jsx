@@ -394,6 +394,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
   const customLinesRef = useRef([]);
   const candlesRef = useRef([]);
   const absorptionsRef = useRef([signal]);
+  const tfSetupRef = useRef(signal);
   const wallTrackerRef = useRef(new Map());
   const seededRef = useRef(false);
 
@@ -422,7 +423,8 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
       if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) continue;
 
       const isLong = sig.side === "LONG";
-      const isCurrent = sig.time === signal.time && sig.side === signal.side;
+      const curTfSetup = tfSetupRef.current;
+      const isCurrent = Boolean(curTfSetup && sig.time === curTfSetup.time && sig.side === curTfSetup.side);
       const radius = isCurrent ? 25 : 16;
 
       // Active setup circle is bright & crisp; past setups are smaller and dimmed
@@ -551,8 +553,8 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
           });
         }
         const hvn = computeHvnProfile(parsed, 50);
-        const abs = detectAbsorptionSignals(parsed, sym, hvn);
-        const list = abs.length ? abs : [signal];
+        const allAbs = detectAbsorptionSignals(parsed, sym, hvn, { includeStopped: true });
+        const list = allAbs.length ? allAbs : chartIv === signal.timeframe ? [signal] : [];
         absorptionsRef.current = list;
         setAbsorptions(list);
 
@@ -688,10 +690,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
               candlesRef.current = updated;
               if (k.x) {
                 const hvn = computeHvnProfile(updated, 50);
-                const abs = detectAbsorptionSignals(updated, sym, hvn);
-                if (abs.length) {
-                  absorptionsRef.current = abs;
-                  setAbsorptions(abs);
+                const allAbs = detectAbsorptionSignals(updated, sym, hvn, { includeStopped: true });
+                if (allAbs.length) {
+                  absorptionsRef.current = allAbs;
+                  setAbsorptions(allAbs);
                 }
               }
               try {
@@ -738,10 +740,10 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
           }
         }
         const hvn = computeHvnProfile(candlesRef.current, 50);
-        const abs = detectAbsorptionSignals(candlesRef.current, sym, hvn);
-        if (abs.length) {
-          absorptionsRef.current = abs;
-          setAbsorptions(abs);
+        const allAbs = detectAbsorptionSignals(candlesRef.current, sym, hvn, { includeStopped: true });
+        if (allAbs.length) {
+          absorptionsRef.current = allAbs;
+          setAbsorptions(allAbs);
         }
         requestAnimationFrame(drawAbsorptionCircles);
       } catch {
@@ -757,69 +759,84 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
     };
   }, [signal, chartIv, drawAbsorptionCircles]);
 
+  // Active setup for the currently selected timeframe (so each TF has its own circle, Entry & SL)
+  const tfSetup = useMemo(() => {
+    const activeOnTf = absorptions.find((s) => !s.stoppedOut && !s.reversed);
+    if (chartIv === signal.timeframe) {
+      return activeOnTf || signal;
+    }
+    return activeOnTf || null;
+  }, [absorptions, chartIv, signal]);
+  tfSetupRef.current = tfSetup;
+
+  const tfAtr14 = useMemo(() => computeAtr14(candles) || signal.atr14 || 0, [candles, signal.atr14]);
+
   // Risk Setup Trade Plan (mandatory)
   const tradePlan = useMemo(() => {
-    if (!risk?.configured) return null;
+    if (!risk?.configured || !tfSetup) return null;
     const entry = calculateSmartEntry({
-      triggerClose: signal.triggerClose || signal.price,
-      open: signal.open,
-      high: signal.high,
-      low: signal.low,
-      side: signal.side,
-      atrAbs: signal.atr14 || 0,
-      currentPrice: candles[candles.length - 1]?.close || signal.price,
+      triggerClose: tfSetup.triggerClose || tfSetup.price,
+      open: tfSetup.open,
+      high: tfSetup.high,
+      low: tfSetup.low,
+      side: tfSetup.side,
+      atrAbs: tfAtr14,
+      currentPrice: candles[candles.length - 1]?.close || tfSetup.price,
       entryMode: risk.entryMode || "retest",
     });
-    const stopLoss = signal.side === "SHORT" ? signal.high : signal.low;
+    const stopLoss = tfSetup.side === "SHORT" ? tfSetup.high : tfSetup.low;
     return calculateTradePlan({
       entry,
-      side: signal.side,
+      side: tfSetup.side,
       stopLoss,
-      atrAbs: signal.atr14 || 0,
+      atrAbs: tfAtr14,
       rewardRatio: Number(risk.rewardRatio) || 1.5,
       balance: Number(risk.balance) || 10000,
       riskPct: Math.min(Number(risk.riskPerTrade) || 1, Number(risk.maxLoss) || Infinity),
     });
-  }, [risk, signal, candles]);
+  }, [risk, tfSetup, tfAtr14, candles]);
 
-  // Detect opposite-side reversal after this signal
+  // Detect opposite-side reversal after this setup
   const reversalSignal = useMemo(() => {
-    const rev = absorptions.find((s) => s.time > signal.time && s.side !== signal.side);
+    if (!tfSetup) return null;
+    const rev = absorptions.find((s) => s.time > tfSetup.time && s.side !== tfSetup.side);
     return rev || null;
-  }, [absorptions, signal.time, signal.side]);
+  }, [absorptions, tfSetup]);
 
   // Check if SL was hit (either on load or live)
   const isStoppedOut = useMemo(() => {
-    if (signal.stoppedOut) return true;
-    const stopPrice = tradePlan?.stop || (signal.side === "SHORT" ? signal.high : signal.low);
+    if (!tfSetup) return false;
+    if (tfSetup.stoppedOut) return true;
+    const stopPrice = tradePlan?.stop || (tfSetup.side === "SHORT" ? tfSetup.high : tfSetup.low);
     if (!(stopPrice > 0)) return false;
     if (lastPrice > 0) {
-      if (signal.side === "LONG" && lastPrice <= stopPrice) return true;
-      if (signal.side === "SHORT" && lastPrice >= stopPrice) return true;
+      if (tfSetup.side === "LONG" && lastPrice <= stopPrice) return true;
+      if (tfSetup.side === "SHORT" && lastPrice >= stopPrice) return true;
     }
     for (const c of candles) {
-      if (c.time <= signal.time) continue;
-      if (signal.side === "LONG" && c.low <= stopPrice) return true;
-      if (signal.side === "SHORT" && c.high >= stopPrice) return true;
+      if (c.time <= tfSetup.time) continue;
+      if (tfSetup.side === "LONG" && c.low <= stopPrice) return true;
+      if (tfSetup.side === "SHORT" && c.high >= stopPrice) return true;
     }
     return false;
-  }, [signal, tradePlan, lastPrice, candles]);
+  }, [tfSetup, tradePlan, lastPrice, candles]);
 
   // Check whether pullback Entry has been filled yet
   const entryFilled = useMemo(() => {
+    if (!tfSetup) return false;
     const entryPrice = tradePlan?.entry;
     if (!(entryPrice > 0)) return false;
     for (const c of candles) {
-      if (c.time < signal.time) continue;
-      if (signal.side === "LONG" && c.low <= entryPrice) return true;
-      if (signal.side === "SHORT" && c.high >= entryPrice) return true;
+      if (c.time < tfSetup.time) continue;
+      if (tfSetup.side === "LONG" && c.low <= entryPrice) return true;
+      if (tfSetup.side === "SHORT" && c.high >= entryPrice) return true;
     }
     if (lastPrice > 0) {
-      if (signal.side === "LONG" && lastPrice <= entryPrice) return true;
-      if (signal.side === "SHORT" && lastPrice >= entryPrice) return true;
+      if (tfSetup.side === "LONG" && lastPrice <= entryPrice) return true;
+      if (tfSetup.side === "SHORT" && lastPrice >= entryPrice) return true;
     }
     return false;
-  }, [tradePlan, candles, signal.time, signal.side, lastPrice]);
+  }, [tfSetup, tradePlan, candles, lastPrice]);
 
   const setupClosed = isStoppedOut || Boolean(reversalSignal);
 
@@ -1063,6 +1080,15 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
             >
               <ShieldCheck weight="duotone" className="w-4 h-4" /> Setup Risk
             </button>
+          </div>
+        ) : !tfSetup ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#0b0c0f] px-4 py-3">
+            <div className="space-y-0.5">
+              <div className="text-[13px] font-medium text-snow">No active setup on {chartIv}</div>
+              <div className="text-[11px] text-fog-2">
+                Showing past setup circles on the chart so you can see how previous levels reacted.
+              </div>
+            </div>
           </div>
         ) : (
           tradePlan && (
