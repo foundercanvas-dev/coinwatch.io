@@ -698,6 +698,34 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
   box-shadow: 0 0 24px -10px rgb(242 112 124 / 38%);
 }
 
+@keyframes cw-toast-in {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes cw-toast-shrink {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.cw-toast-in {
+  animation: cw-toast-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.cw-toast-bar {
+  animation: cw-toast-shrink 8s linear forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tab-transition,
   .cw-card-in,
@@ -714,7 +742,9 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
   .cw-sweep,
   .cw-top-mover-pulse,
   .cw-confirmed-long,
-  .cw-confirmed-short {
+  .cw-confirmed-short,
+  .cw-toast-in,
+  .cw-toast-bar {
     animation: none;
   }
 }

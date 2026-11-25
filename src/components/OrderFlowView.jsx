@@ -183,6 +183,8 @@ export default function OrderFlowView({
   initialSignal,
   onConsumedInitialSignal,
   onNewSignals,
+  popupsEnabled = true,
+  onTogglePopups,
 }) {
   const [timeframe, setTimeframe] = useState("all");
   const [tab, setTab] = useState("new"); // new | active | history
@@ -345,6 +347,7 @@ export default function OrderFlowView({
         onBack={() => setSelectedSignal(null)}
         onSwitchSignal={(nextSig) => setSelectedSignal(nextSig)}
         setActiveNav={setActiveNav}
+        popupsEnabled={popupsEnabled}
       />
     );
   }
@@ -373,7 +376,22 @@ export default function OrderFlowView({
         eyebrowIcon={Stack}
         title="Order Flow"
         description="Clean trade setups at key highs and lows. Pick any signal to view Entry, Stop Loss, and live order depth."
-        actions={<LivePill isConnected={!scanning || signals.length > 0} />}
+        actions={
+          <div className="flex items-center gap-2">
+            {onTogglePopups && (
+              <button
+                type="button"
+                onClick={onTogglePopups}
+                className={`cw-btn !h-9 !px-3 !text-[12px] ${
+                  popupsEnabled ? "!border-mint/35 !text-mint" : "!text-fog-2"
+                }`}
+              >
+                Popups: {popupsEnabled ? "On" : "Off"}
+              </button>
+            )}
+            <LivePill isConnected={!scanning || signals.length > 0} />
+          </div>
+        }
       />
 
       {/* Live Crypto Inflow / Outflow 2 Cards */}
@@ -608,7 +626,15 @@ function precisionFor(p) {
  * - Entry / SL / TP lines strictly from Risk Setup
  * - MBO DOM Heatmap side panel (100ms depth + Wall + Spoof alerts)
  */
-function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal, setActiveNav }) {
+function OrderFlowSignalChart({
+  signal,
+  timeframe,
+  risk,
+  onBack,
+  onSwitchSignal,
+  setActiveNav,
+  popupsEnabled = true,
+}) {
   const [chartIv, setChartIv] = useState(timeframe || "5m");
   const [candles, setCandles] = useState([]);
   const [absorptions, setAbsorptions] = useState([signal]);
@@ -1218,10 +1244,17 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, onSwitchSignal,
           : isStoppedOut
             ? `stop-${signal.id}`
             : null;
-        if (!activePopupKey || popupDismissedId === activePopupKey) return null;
+        if (!activePopupKey || !popupsEnabled || popupDismissedId === activePopupKey) return null;
 
         return (
-          <div className="fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl border border-white/[0.12] space-y-3">
+          <div
+            className={`fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl overflow-hidden space-y-3 cw-toast-in ${
+              reversalSignal
+                ? "!border-terminal-yellow/50 cw-vol-mid-up"
+                : "!border-coral/50 cw-vol-high-down"
+            }`}
+          >
+            <div className="pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent cw-sweep" />
             {reversalSignal ? (
               <>
                 <div className="flex items-start justify-between gap-2">

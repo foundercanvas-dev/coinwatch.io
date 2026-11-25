@@ -392,30 +392,34 @@ export default function App() {
   }, [engine.live, backendLive]);
 
   // Global 8-second popup notification whenever a new Order Flow setup arrives (works on any tab)
+  const [popupsEnabled, setPopupsEnabled] = useLocalStorage("cw.orderflow.popups", true);
   const [orderFlowToast, setOrderFlowToast] = useState(null);
   const [pendingOrderFlowSignal, setPendingOrderFlowSignal] = useState(null);
   const seenOrderFlowIdsRef = React.useRef(new Set());
   const orderFlowSeededRef = React.useRef(false);
   const orderFlowToastTimerRef = React.useRef(null);
 
-  const notifyOrderFlow = React.useCallback((list) => {
-    if (!Array.isArray(list) || !list.length) return;
-    if (!orderFlowSeededRef.current) {
+  const notifyOrderFlow = React.useCallback(
+    (list) => {
+      if (!Array.isArray(list) || !list.length) return;
+      if (!orderFlowSeededRef.current) {
+        for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
+        orderFlowSeededRef.current = true;
+        return;
+      }
+      const freshSig = list.find((s) => !seenOrderFlowIdsRef.current.has(s.id));
       for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
-      orderFlowSeededRef.current = true;
-      return;
-    }
-    const freshSig = list.find((s) => !seenOrderFlowIdsRef.current.has(s.id));
-    for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
-    if (!freshSig) return;
+      if (!freshSig || !popupsEnabled) return;
 
-    setOrderFlowToast(freshSig);
-    playAlertSound();
-    if (orderFlowToastTimerRef.current) clearTimeout(orderFlowToastTimerRef.current);
-    orderFlowToastTimerRef.current = setTimeout(() => {
-      setOrderFlowToast(null);
-    }, 8000);
-  }, []);
+      setOrderFlowToast(freshSig);
+      playAlertSound();
+      if (orderFlowToastTimerRef.current) clearTimeout(orderFlowToastTimerRef.current);
+      orderFlowToastTimerRef.current = setTimeout(() => {
+        setOrderFlowToast(null);
+      }, 8000);
+    },
+    [popupsEnabled],
+  );
 
   useEffect(() => {
     if (activeNav === "order_flow") return undefined;
@@ -484,6 +488,11 @@ export default function App() {
               initialSignal={pendingOrderFlowSignal}
               onConsumedInitialSignal={() => setPendingOrderFlowSignal(null)}
               onNewSignals={notifyOrderFlow}
+              popupsEnabled={popupsEnabled}
+              onTogglePopups={() => {
+                setPopupsEnabled((v) => !v);
+                setOrderFlowToast(null);
+              }}
             />
           )}
 
@@ -526,9 +535,17 @@ export default function App() {
         </div>
       </main>
 
-      {orderFlowToast && (
-        <div className="fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl border border-mint/35 space-y-3">
-          <div className="flex items-start justify-between gap-2.5">
+      {orderFlowToast && popupsEnabled && (
+        <div
+          key={orderFlowToast.id}
+          className={`fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl overflow-hidden space-y-3 cw-toast-in ${
+            orderFlowToast.side === "LONG"
+              ? "!border-mint/50 cw-vol-high-up"
+              : "!border-coral/50 cw-vol-high-down"
+          }`}
+        >
+          <div className="pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent cw-sweep" />
+          <div className="relative flex items-start justify-between gap-2.5">
             <div className="flex items-center gap-2.5 min-w-0">
               <CoinIcon
                 symbol={orderFlowToast.symbol}
@@ -565,7 +582,7 @@ export default function App() {
               ✕
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
             <button
               type="button"
               onClick={() => {
@@ -577,6 +594,13 @@ export default function App() {
             >
               Open Order Flow
             </button>
+          </div>
+          <div className="relative h-1 w-full rounded-full bg-white/[0.06] overflow-hidden">
+            <div
+              className={`h-full cw-toast-bar ${
+                orderFlowToast.side === "LONG" ? "bg-mint" : "bg-coral"
+              }`}
+            />
           </div>
         </div>
       )}
