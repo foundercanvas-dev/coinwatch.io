@@ -163,6 +163,7 @@ export function computeHvnProfile(candles, rows = 50) {
       isPoc: b.index === pocIdx,
       role: b.price <= lastPrice ? "SUPPORT" : "RESISTANCE",
       strength: avgVol > 0 ? +(b.volume / avgVol).toFixed(2) : 1,
+      percent: totalVol > 0 ? Math.round((b.volume / totalVol) * 100) : 0,
     }))
     .sort((a, b) => b.volume - a.volume);
 
@@ -400,7 +401,7 @@ export function detectAbsorptionSignals(
 }
 
 /**
- * MBO DOM Heatmap + Wall (>3x average) + Spoofing (<5s vanish) analyzer.
+ * MBO DOM Heatmap + Wall (>3x average) + Spoofing (<5s vanish) + 30s+ REAL + Cluster (±0.1%) analyzer.
  */
 export function analyzeDomHeatmap(bids, asks, wallTrackerMap, now = Date.now(), lastPrice = 0) {
   const normBids = (bids || []).slice(0, 25).map(([p, q]) => ({
@@ -431,17 +432,24 @@ export function analyzeDomHeatmap(bids, asks, wallTrackerMap, now = Date.now(), 
     const ratio = avg > 0 ? row.qty / avg : 1;
     const isWall = ratio >= 3.0;
     const key = `${side}:${row.price}`;
+    let ageSeconds = 0;
+    let status = "NORMAL";
     if (isWall) {
       activeKeys.add(key);
       if (!wallTrackerMap.has(key)) {
         wallTrackerMap.set(key, { price: row.price, side, qty: row.qty, usd: row.usd, firstSeen: now });
       }
+      const info = wallTrackerMap.get(key);
+      ageSeconds = Math.round((now - info.firstSeen) / 1000);
+      status = ageSeconds >= 30 ? "REAL" : "FORMING";
     }
     return {
       ...row,
       side,
       ratio: +ratio.toFixed(1),
       isWall,
+      status,
+      ageSeconds,
       intensity: Math.min(1, row.qty / maxQty),
     };
   };
@@ -466,12 +474,68 @@ export function analyzeDomHeatmap(bids, asks, wallTrackerMap, now = Date.now(), 
     }
   }
 
+  const buyWalls = taggedBids.filter((b) => b.isWall);
+  const sellWalls = taggedAsks.filter((a) => a.isWall);
+
+  // Cluster Detection: 3+ big walls within ±0.1% price range
+  const hasCluster = (walls) => {
+    if (walls.length < 3) return false;
+    for (const w of walls) {
+      const nearby = walls.filter((o) => Math.abs(o.price - w.price) / Math.max(1e-9, w.price) <= 0.001);
+      if (nearby.length >= 3) return true;
+    }
+    return false;
+  };
+
   return {
     bids: taggedBids,
     asks: taggedAsks,
-    buyWalls: taggedBids.filter((b) => b.isWall),
-    sellWalls: taggedAsks.filter((a) => a.isWall),
+    buyWalls,
+    sellWalls,
+    realBuyWalls: buyWalls.filter((w) => w.status === "REAL"),
+    realSellWalls: sellWalls.filter((w) => w.status === "REAL"),
+    buyCluster: hasCluster(buyWalls),
+    sellCluster: hasCluster(sellWalls),
     spoofs,
+  };
+}
+
+/**
+ * Crypto-Adaptive Accuracy Combo Filter (A+ / B / C):
+ * Evaluates HVN alignment + Order Book Wall + Absorption/Wick + DeltaFlip/Imbalance + Funding crowding.
+ */
+export function classifySignalTier(
+  sig,
+  { hasWallConfirm = false, hasRealWall = false, hasCluster = false, fundingRate = 0 } = {},
+) {
+  const hasHvn = Boolean(sig.nearHvn);
+  const hasAbsorption = true; // already passed 2.0x vol + 35% rejection wick + swing high/low
+  const hasFlowShift = Boolean(sig.deltaFlip || sig.hasCvdDivergence);
+  const hasWall = Boolean(hasWallConfirm || hasRealWall);
+
+  const alignedCount = [hasHvn, hasWall, hasAbsorption, hasFlowShift].filter(Boolean).length;
+
+  let tier = alignedCount >= 3 && hasHvn && hasWall ? "A+" : alignedCount >= 2 ? "B" : "C";
+
+  // Funding Rate overcrowding guard: extreme positive funding downgrades LONG; extreme negative downgrades SHORT
+  const fr = Number(fundingRate || 0);
+  const overcrowded =
+    (sig.side === "LONG" && fr >= 0.0008) || (sig.side === "SHORT" && fr <= -0.0008);
+  if (overcrowded && tier === "A+") {
+    tier = "B";
+  }
+
+  let scoreBoost = 0;
+  if (hasWall) scoreBoost += 8;
+  if (hasRealWall) scoreBoost += 5;
+  if (hasCluster) scoreBoost += 6;
+  if (overcrowded) scoreBoost -= 8;
+
+  return {
+    tier,
+    overcrowded,
+    hasCluster,
+    score: Math.max(50, Math.min(99, Number(sig.score || 70) + scoreBoost)),
   };
 }
 

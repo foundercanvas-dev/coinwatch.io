@@ -16,6 +16,7 @@ import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
 import { fmtPrice, fmtUsd, fmtTime, pct } from "../lib/format";
 import {
   analyzeDomHeatmap,
+  classifySignalTier,
   computeAtr14,
   computeDeltaAndCVD,
   computeHvnProfile,
@@ -290,41 +291,71 @@ export default function OrderFlowView({
           historyMerged.push({ ...s, expired: true });
         }
       }
-      // Order Book Wall confirmation in background for active candidates
+      // Order Book Wall + Cluster + Funding Rate confirmation in background for active candidates
       const activeList = [...byKey.values()];
       const uniqueActiveSyms = [...new Set(activeList.map((s) => s.symbol))].slice(0, 24);
       const wallBySym = new Map();
-      await Promise.allSettled(
-        uniqueActiveSyms.map(async (sym) => {
+      const fundingBySym = new Map();
+
+      await Promise.allSettled([
+        fetch("https://fapi.binance.com/fapi/v1/premiumIndex")
+          .then((r) => r.json())
+          .then((rows) => {
+            if (Array.isArray(rows)) {
+              for (const row of rows) {
+                if (row?.symbol) fundingBySym.set(row.symbol, Number(row.lastFundingRate || 0));
+              }
+            }
+          }),
+        ...uniqueActiveSyms.map(async (sym) => {
           const depth = await fetch(
-            `https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=20`,
+            `https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=25`,
           ).then((r) => r.json());
           if (depth?.bids && depth?.asks) {
             const analyzed = analyzeDomHeatmap(depth.bids, depth.asks, new Map(), Date.now(), 0);
             wallBySym.set(sym, {
               hasBuyWall: analyzed.buyWalls.length > 0,
               hasSellWall: analyzed.sellWalls.length > 0,
+              buyCluster: analyzed.buyCluster,
+              sellCluster: analyzed.sellCluster,
             });
           }
         }),
-      );
+      ]);
 
-      const enrichedActive = activeList.map((s) => {
-        const w = wallBySym.get(s.symbol);
-        const hasWallConfirm =
-          Boolean(w) && (s.side === "LONG" ? w.hasBuyWall : w.hasSellWall);
-        return {
-          ...s,
-          hasWallConfirm,
-          score: hasWallConfirm ? Math.min(99, s.score + 10) : s.score,
-        };
+      const enrichedActive = activeList
+        .map((s) => {
+          const w = wallBySym.get(s.symbol);
+          const hasWallConfirm =
+            Boolean(w) && (s.side === "LONG" ? w.hasBuyWall : w.hasSellWall);
+          const hasCluster =
+            Boolean(w) && (s.side === "LONG" ? w.buyCluster : w.sellCluster);
+          const fundingRate = fundingBySym.get(s.symbol) || 0;
+          const classified = classifySignalTier(s, {
+            hasWallConfirm,
+            hasCluster,
+            fundingRate,
+          });
+          return {
+            ...s,
+            hasWallConfirm,
+            hasCluster: classified.hasCluster,
+            tier: classified.tier,
+            score: classified.score,
+          };
+        })
+        .filter((s) => s.tier !== "C");
+
+      const sorted = enrichedActive.sort((a, b) => {
+        if (a.tier !== b.tier) return a.tier === "A+" ? -1 : 1;
+        return b.time - a.time;
       });
-
-      const sorted = enrichedActive.sort((a, b) => b.time - a.time);
       setSignals(sorted);
       setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 60));
       const nowS = Math.floor(Date.now() / 1000);
-      const freshNew = sorted.filter((s) => nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe));
+      const freshNew = sorted.filter(
+        (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
+      );
       if (freshNew.length) onNewSignals?.(freshNew);
     } catch {
       /* keep previous signals */
@@ -543,6 +574,17 @@ export default function OrderFlowView({
                         <span className="px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-[12px] font-bold uppercase text-snow cw-num">
                           {sig.timeframe}
                         </span>
+                        {sig.tier && (
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-bold cw-num border ${
+                              sig.tier === "A+"
+                                ? "bg-terminal-yellow/15 border-terminal-yellow/40 text-terminal-yellow"
+                                : "bg-white/[0.05] border-white/[0.10] text-fog"
+                            }`}
+                          >
+                            {sig.tier}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] text-fog-2 cw-num mt-0.5">
                         {fmtTime((sig.time - TZ_SHIFT) * 1000)}
