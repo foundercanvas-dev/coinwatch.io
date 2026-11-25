@@ -1312,37 +1312,35 @@ function OrderFlowSignalChart({
         );
       })()}
 
-      {/* Live Buy / Sell Volume Bar */}
-      <section className="cw-panel cw-glow p-3.5">
-        {(() => {
-          const totalUsd = liveVol.buyUsd + liveVol.sellUsd;
-          const buyPct = totalUsd > 0 ? (liveVol.buyUsd / totalUsd) * 100 : 50;
-          const sellPct = 100 - buyPct;
-          return (
-            <div className="relative h-12 overflow-hidden rounded-xl border border-white/[0.07] bg-[#0b0c0f]">
-              <div
-                className="absolute inset-y-0 left-0 bg-gradient-to-r from-mint/[0.24] via-mint/[0.13] to-mint/[0.03] transition-[width] duration-150 ease-out"
-                style={{ width: `${buyPct}%` }}
-              />
-              <div
-                className="absolute inset-y-0 right-0 bg-gradient-to-l from-coral/[0.24] via-coral/[0.13] to-coral/[0.03] transition-[width] duration-150 ease-out"
-                style={{ width: `${sellPct}%` }}
-              />
-              <div className="relative flex h-full items-center justify-between gap-2 px-4 text-[12px] cw-num">
-                <span className="text-mint font-semibold">
-                  Buy {fmtUsd(liveVol.buyUsd)} <span className="opacity-80">({buyPct.toFixed(0)}%)</span>
-                </span>
-                <span className="hidden sm:inline text-fog-2">
-                  {chartIv} Volume: <strong className="text-snow">{fmtUsd(totalUsd)}</strong>
-                </span>
-                <span className="text-coral font-semibold">
-                  Sell {fmtUsd(liveVol.sellUsd)} <span className="opacity-80">({sellPct.toFixed(0)}%)</span>
-                </span>
-              </div>
+      {/* Live Buy / Sell Volume Bar (single clean card) */}
+      {(() => {
+        const totalUsd = liveVol.buyUsd + liveVol.sellUsd;
+        const buyPct = totalUsd > 0 ? (liveVol.buyUsd / totalUsd) * 100 : 50;
+        const sellPct = 100 - buyPct;
+        return (
+          <div className="cw-panel relative h-12 overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 bg-gradient-to-r from-mint/[0.24] via-mint/[0.13] to-mint/[0.03] transition-[width] duration-150 ease-out"
+              style={{ width: `${buyPct}%` }}
+            />
+            <div
+              className="absolute inset-y-0 right-0 bg-gradient-to-l from-coral/[0.24] via-coral/[0.13] to-coral/[0.03] transition-[width] duration-150 ease-out"
+              style={{ width: `${sellPct}%` }}
+            />
+            <div className="relative flex h-full items-center justify-between gap-2 px-4 text-[12px] cw-num">
+              <span className="text-mint font-semibold">
+                Buy {fmtUsd(liveVol.buyUsd)} <span className="opacity-80">({buyPct.toFixed(0)}%)</span>
+              </span>
+              <span className="hidden sm:inline text-fog-2">
+                {chartIv} Volume: <strong className="text-snow">{fmtUsd(totalUsd)}</strong>
+              </span>
+              <span className="text-coral font-semibold">
+                Sell {fmtUsd(liveVol.sellUsd)} <span className="opacity-80">({sellPct.toFixed(0)}%)</span>
+              </span>
             </div>
-          );
-        })()}
-      </section>
+          </div>
+        );
+      })()}
 
       {/* Clean Candlestick Chart with 10% Opacity Absorption Circle Overlay + MBO DOM Side Panel */}
       <section className="cw-panel p-3 md:p-4">
