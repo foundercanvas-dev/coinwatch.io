@@ -95,7 +95,17 @@ const IV_SEC = {
   "1d": 86400,
 };
 
-const newWindowFor = (tf) => Math.max(300, (IV_SEC[tf] || 300) * 4);
+const NEW_WINDOW_SEC = {
+  "1m": 180,
+  "3m": 360,
+  "5m": 600,
+  "15m": 1200,
+  "1h": 1800,
+  "4h": 2700,
+  "1d": 3600,
+};
+
+const newWindowFor = (tf) => NEW_WINDOW_SEC[tf] || 600;
 
 function formatCountdown(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -193,7 +203,10 @@ export default function OrderFlowView({ risk, setActiveNav }) {
             const hvn = computeHvnProfile(candles, 50);
             const { divergence } = computeDeltaAndCVD(candles);
             const atr14 = computeAtr14(candles);
-            const abs = detectAbsorptionSignals(candles, sym, hvn, { includeStopped: true });
+            const abs = detectAbsorptionSignals(candles, sym, hvn, {
+              includeStopped: true,
+              includeLive: true,
+            });
 
             return abs.map((sig) => ({
               ...sig,
