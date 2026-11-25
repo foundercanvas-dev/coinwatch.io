@@ -914,27 +914,25 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
           const buyPct = totalUsd > 0 ? (liveVol.buyUsd / totalUsd) * 100 : 50;
           const sellPct = 100 - buyPct;
           return (
-            <div className="rounded-xl border border-white/[0.06] bg-[#0b0c0f] px-3.5 py-2.5 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] cw-num">
-                <span className="text-mint font-medium">
-                  Buy Volume: {fmtUsd(liveVol.buyUsd)} ({buyPct.toFixed(0)}%)
+            <div className="relative h-12 overflow-hidden rounded-xl border border-white/[0.07] bg-[#0b0c0f]">
+              <div
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-mint/[0.24] via-mint/[0.13] to-mint/[0.03] transition-[width] duration-300"
+                style={{ width: `${buyPct}%` }}
+              />
+              <div
+                className="absolute inset-y-0 right-0 bg-gradient-to-l from-coral/[0.24] via-coral/[0.13] to-coral/[0.03] transition-[width] duration-300"
+                style={{ width: `${sellPct}%` }}
+              />
+              <div className="relative flex h-full items-center justify-between gap-2 px-4 text-[12px] cw-num">
+                <span className="text-mint font-semibold">
+                  Buy {fmtUsd(liveVol.buyUsd)} <span className="opacity-80">({buyPct.toFixed(0)}%)</span>
                 </span>
-                <span className="text-fog-2">
-                  Current {chartIv} Volume: <strong className="text-snow">{fmtUsd(totalUsd)}</strong>
+                <span className="hidden sm:inline text-fog-2">
+                  {chartIv} Volume: <strong className="text-snow">{fmtUsd(totalUsd)}</strong>
                 </span>
-                <span className="text-coral font-medium">
-                  Sell Volume: {fmtUsd(liveVol.sellUsd)} ({sellPct.toFixed(0)}%)
+                <span className="text-coral font-semibold">
+                  Sell {fmtUsd(liveVol.sellUsd)} <span className="opacity-80">({sellPct.toFixed(0)}%)</span>
                 </span>
-              </div>
-              <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/[0.05]">
-                <div
-                  className="h-full bg-mint transition-[width] duration-300"
-                  style={{ width: `${buyPct}%` }}
-                />
-                <div
-                  className="h-full bg-coral transition-[width] duration-300"
-                  style={{ width: `${sellPct}%` }}
-                />
               </div>
             </div>
           );
