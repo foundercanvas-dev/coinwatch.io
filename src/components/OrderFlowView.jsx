@@ -165,7 +165,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
         eyebrow="Order Flow Scanner"
         eyebrowIcon={Stack}
         title="Order Flow Signals"
-        description="Real-time Buyer/Seller Absorption detected strictly at recent swing highs & lows using background Delta, CVD & HVN math."
+        description="Real-time Order Flow signals detected strictly at recent swing highs & lows using background Delta, CVD & HVN math."
         actions={
           <>
             <Segmented
@@ -182,9 +182,9 @@ export default function OrderFlowView({ risk, setActiveNav }) {
       {/* Compact Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="Monitored Futures" value={WATCH_SYMBOLS.length} caption="Binance Perpetuals" />
-        <StatCard label="Active Signals" value={signals.length} caption={`${timeframe} Absorption`} highlight />
-        <StatCard label="Long Absorption" value={longCount} caption="At recent swing lows" tone="up" />
-        <StatCard label="Short Absorption" value={shortCount} caption="At recent swing highs" tone="down" />
+        <StatCard label="Active Signals" value={signals.length} caption={`${timeframe} Order Flow`} highlight />
+        <StatCard label="Long Signals" value={longCount} caption="At recent swing lows" tone="up" />
+        <StatCard label="Short Signals" value={shortCount} caption="At recent swing highs" tone="down" />
       </div>
 
       {/* Filter Bar */}
@@ -193,7 +193,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           <div className="flex items-center gap-2">
             <Lightning weight="duotone" className="w-4 h-4 text-mint" />
             <span className="text-[13px] font-medium text-snow">
-              Recent High / Low Absorption Signals
+              Recent High / Low Signals
             </span>
           </div>
           <Segmented
@@ -258,7 +258,7 @@ export default function OrderFlowView({ risk, setActiveNav }) {
                     <div className="cw-num text-snow font-medium mt-0.5">{fmtPrice(sig.price)}</div>
                   </div>
                   <div>
-                    <div className="text-fog-2">Absorbed</div>
+                    <div className="text-fog-2">Flow Vol</div>
                     <div className={`cw-num font-medium mt-0.5 ${isLong ? "text-mint" : "text-coral"}`}>
                       {formatCompactNum(sig.absorbedVol)}
                     </div>
@@ -277,8 +277,8 @@ export default function OrderFlowView({ risk, setActiveNav }) {
           {!visibleSignals.length && (
             <div className="col-span-full py-14 text-center text-[12px] text-fog-2">
               {scanning
-                ? "Scanning Binance Futures order flow for absorption at recent highs & lows…"
-                : "No recent swing high/low absorption signals right now."}
+                ? "Scanning Binance Futures order flow at recent highs & lows…"
+                : "No recent swing high/low signals right now."}
             </div>
           )}
         </div>
@@ -711,7 +711,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
   return (
     <div className="space-y-4">
       <PageHeader
-        eyebrow="Order Flow Absorption"
+        eyebrow="Order Flow Signal"
         eyebrowIcon={Stack}
         title={
           <span className="inline-flex items-center gap-3">
@@ -725,7 +725,7 @@ function OrderFlowSignalChart({ signal, timeframe, risk, onBack, setActiveNav })
             {baseCoin}/USDT
           </span>
         }
-        description={`${signal.side} Absorption at recent swing ${isLong ? "low" : "high"} · ${chartIv} Binance Perpetual`}
+        description={`${signal.side} signal at recent swing ${isLong ? "low" : "high"} · ${chartIv} Binance Perpetual`}
         actions={
           <>
             <Segmented
