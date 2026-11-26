@@ -942,107 +942,96 @@ function OrderFlowSignalChart({
       hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       hctx.clearRect(0, 0, width, height);
 
-      const maxBarWidth = width * 0.34;
+      const maxBarWidth = width * 0.48;
       for (const bin of bins) {
         const yTop = series.priceToCoordinate(bin.high);
         const yBot = series.priceToCoordinate(bin.low);
         if (yTop == null || yBot == null || !Number.isFinite(yTop) || !Number.isFinite(yBot)) continue;
         const rawH = Math.abs(yBot - yTop);
         const top = Math.min(yTop, yBot);
-        const barW = maxVol > 0 ? Math.max(8, (bin.volume / maxVol) * maxBarWidth) : 8;
+        const barW = maxVol > 0 ? Math.max(16, (bin.volume / maxVol) * maxBarWidth) : 16;
         const hvnEntry = hvnByIdx.get(bin.index);
 
         if (hvnEntry) {
-          const barH = Math.max(hvnEntry.isPoc ? 10 : 7, rawH * 0.86);
+          const barH = Math.max(hvnEntry.isPoc ? 16 : 13, rawH * 0.9);
           const yDraw = top + (rawH - barH) / 2;
           hctx.fillStyle = hvnEntry.isPoc
-            ? "rgba(249, 115, 22, 0.40)"
-            : "rgba(217, 119, 6, 0.24)";
+            ? "rgba(180, 108, 24, 0.44)"
+            : "rgba(128, 92, 32, 0.32)";
           hctx.fillRect(0, yDraw, barW, barH);
-          hctx.strokeStyle = hvnEntry.isPoc
-            ? "rgba(251, 146, 60, 0.85)"
-            : "rgba(245, 158, 11, 0.45)";
-          hctx.lineWidth = hvnEntry.isPoc ? 1.5 : 1;
-          hctx.strokeRect(0.5, yDraw + 0.5, Math.max(1, barW - 1), Math.max(1, barH - 1));
         } else {
-          const barH = Math.max(2, Math.min(4, rawH * 0.45));
+          const barH = Math.max(1.5, Math.min(3, rawH * 0.35));
           const yDraw = top + (rawH - barH) / 2;
-          hctx.fillStyle = "rgba(156, 163, 175, 0.11)";
+          hctx.fillStyle = "rgba(156, 163, 175, 0.06)";
           hctx.fillRect(0, yDraw, barW, barH);
         }
       }
     }
 
-    // 2. Draw always-visible Yellow X Data + Reaction History pills & hover hitboxes
+    // 2. Draw clean ATAS-style X Data + Reaction History inside right end of each HVN bar
     const hitboxes = [];
     const placedPillYs = [];
-    const maxBarWidth = width * 0.34;
+    const maxBarWidth = width * 0.48;
     const sortedHvns = [...hvnsWithReaction].sort((a, b) => {
       if (a.isPoc !== b.isPoc) return a.isPoc ? -1 : 1;
       return b.volume - a.volume;
     });
 
-    ctx.font = '700 11px "Funnel Display", sans-serif';
     for (const bin of sortedHvns) {
       const yTop = series.priceToCoordinate(bin.high);
       const yBot = series.priceToCoordinate(bin.low);
       const yMid = series.priceToCoordinate(bin.price);
       if (yMid == null || !Number.isFinite(yMid)) continue;
 
-      const barW = maxVol > 0 ? Math.max(12, (bin.volume / maxVol) * maxBarWidth) : 12;
+      const barW = maxVol > 0 ? Math.max(120, (bin.volume / maxVol) * maxBarWidth) : 120;
       const yMin = yTop != null && yBot != null ? Math.min(yTop, yBot) - 3 : yMid - 8;
       const yMax = yTop != null && yBot != null ? Math.max(yTop, yBot) + 3 : yMid + 8;
-      hitboxes.push({ yMin, yMax, xMax: width - 72, bin });
+      hitboxes.push({ yMin, yMax, xMax: Math.max(barW + 40, width * 0.52), bin });
 
-      if (placedPillYs.some((py) => Math.abs(py - yMid) < 20)) continue;
+      if (placedPillYs.some((py) => Math.abs(py - yMid) < 18)) continue;
       placedPillYs.push(yMid);
 
-      const xDataText = `${formatCompactNum(bin.volume)} | ${bin.percent}%`;
-      const reactText =
+      const volPart = `${formatCompactNum(bin.volume)} | `;
+      const pctPart = `${bin.percent}%`;
+      const reactPart =
         bin.touches > 0 ? ` | ${bin.reactions}/${bin.touches} (${bin.reactionRate}%)` : "";
-      const mainText = `${xDataText}${reactText}`;
-      const confText = bin.confidenceLabel;
 
-      ctx.font = '700 11px "Funnel Display", sans-serif';
-      const mainW = ctx.measureText(mainText).width;
-      ctx.font = '600 9.5px "Funnel Display", sans-serif';
-      const confW = ctx.measureText(confText).width;
-
-      const dotPad = 14;
-      const pillW = mainW + dotPad + confW + 18;
-      const pillH = 18;
-      const pillX = Math.max(6, Math.min(width - pillW - 76, barW + 6));
-      const pillY = Math.max(4, Math.min(height - pillH - 4, yMid - pillH / 2));
-
-      // Black pill background
       ctx.save();
-      ctx.fillStyle = "rgba(8, 10, 13, 0.90)";
-      ctx.strokeStyle = bin.isPoc ? "rgba(251, 146, 60, 0.65)" : "rgba(255, 215, 0, 0.32)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(pillX, pillY, pillW, pillH, 5);
-      ctx.fill();
-      ctx.stroke();
-
-      // Yellow X Data + Reaction History text
-      ctx.fillStyle = "#FFD700";
       ctx.font = '700 11px "Funnel Display", sans-serif';
+      const volW = ctx.measureText(volPart).width;
+      const pctW = ctx.measureText(pctPart).width;
+      ctx.font = '600 10px "Funnel Display", sans-serif';
+      const reactW = reactPart ? ctx.measureText(reactPart).width : 0;
+      const totalTextW = volW + pctW + reactW + 14;
+
+      const labelX = Math.max(8, Math.min(width - totalTextW - 76, barW - totalTextW + 10));
+      const labelY = Math.max(8, Math.min(height - 8, yMid));
+
+      // Subtle dark backing only behind text so it stays legible over candles
+      ctx.fillStyle = "rgba(11, 12, 15, 0.72)";
+      ctx.fillRect(labelX - 4, labelY - 7, totalTextW + 6, 14);
+
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(mainText, pillX + 7, pillY + pillH / 2);
+      ctx.font = '700 11px "Funnel Display", sans-serif';
+      ctx.fillStyle = "#FFD700";
+      ctx.fillText(volPart, labelX, labelY);
 
-      // Confidence Dot
-      const dotX = pillX + 7 + mainW + 8;
-      const dotY = pillY + pillH / 2;
+      ctx.fillStyle = bin.role === "SUPPORT" ? "#7ee6a3" : "#f2707c";
+      ctx.fillText(pctPart, labelX + volW, labelY);
+
+      if (reactPart) {
+        ctx.font = '600 10px "Funnel Display", sans-serif';
+        ctx.fillStyle = "#FFD700";
+        ctx.fillText(reactPart, labelX + volW + pctW, labelY);
+      }
+
+      // Clean confidence dot right after text
+      const dotX = labelX + volW + pctW + reactW + 7;
       ctx.beginPath();
-      ctx.arc(dotX, dotY, 3.2, 0, Math.PI * 2);
+      ctx.arc(dotX, labelY, 3, 0, Math.PI * 2);
       ctx.fillStyle = bin.confidenceColor;
       ctx.fill();
-
-      // Confidence Text
-      ctx.fillStyle = bin.confidenceColor;
-      ctx.font = '600 9.5px "Funnel Display", sans-serif';
-      ctx.fillText(confText, dotX + 6, dotY);
       ctx.restore();
     }
     hvnHitboxesRef.current = hitboxes;
