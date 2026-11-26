@@ -401,12 +401,13 @@ export default function App() {
 
   const notifyOrderFlow = React.useCallback(
     (list) => {
-      if (!Array.isArray(list) || !list.length) return;
+      if (!Array.isArray(list)) return;
       if (!orderFlowSeededRef.current) {
         for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
         orderFlowSeededRef.current = true;
         return;
       }
+      if (!list.length) return;
       const freshSig = list.find((s) => !seenOrderFlowIdsRef.current.has(s.id));
       for (const s of list) seenOrderFlowIdsRef.current.add(s.id);
       if (!freshSig || !popupsEnabled) return;

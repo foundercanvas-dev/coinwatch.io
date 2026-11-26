@@ -370,7 +370,7 @@ export async function fetchOrderFlowNewSignals() {
   prefetchAllOrderFlowTimeframes();
   const nowS = Math.floor(Date.now() / 1000);
   const fresh = (result.signals || []).filter(
-    (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
+    (s) => s.tier !== "C" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
   );
   return fresh.sort((a, b) => b.time - a.time);
 }
@@ -478,9 +478,9 @@ export default function OrderFlowView({
         prefetchAllOrderFlowTimeframes();
         const nowS = Math.floor(Date.now() / 1000);
         const freshNew = (result.signals || []).filter(
-          (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
+          (s) => s.tier !== "C" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
         );
-        if (freshNew.length) onNewSignals?.(freshNew);
+        onNewSignals?.(freshNew);
       } catch {
         /* keep previous/cached signals */
       } finally {
