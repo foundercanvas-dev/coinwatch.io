@@ -14,7 +14,7 @@ from app.ingestors.hyperliquid import HyperliquidIngestor
 from app.ingestors.binance import BinanceIngestor
 from app.ingestors.bybit import BybitIngestor
 from app.ingestors.okx import OkxIngestor
-from app.api.routes import router as api_router, build_scanner_row_for_buffer
+from app.api.routes import router as api_router, build_scanner_row_for_buffer, build_orderflow_snapshot
 from app.api.ws import ws_hub
 from app.alerts.rules import alert_engine
 from app.alerts.telegram import telegram_dispatcher
@@ -122,6 +122,17 @@ async def background_scanner_loop():
 
         await asyncio.sleep(0.5)  # 500ms broadcast cycle (ultra smooth, zero lag)
 
+async def orderflow_prewarm_loop():
+    """Keep the shared 'all' Order Flow snapshot warm in memory so every user gets instant loads."""
+    await asyncio.sleep(2.0)
+    while True:
+        try:
+            await build_orderflow_snapshot("all")
+        except Exception as e:
+            logger.debug(f"OrderFlow prewarm error: {e}")
+        await asyncio.sleep(34.0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION}...")
@@ -138,6 +149,13 @@ async def lifespan(app: FastAPI):
 
     # 2. Start Scanner & Alert Dispatcher loop
     scanner_task = asyncio.create_task(background_scanner_loop())
+    prewarm_task = asyncio.create_task(orderflow_prewarm_loop())
+
+    yield
+
+    logger.info("Shutting down Perp Scanner...")
+    scanner_task.cancel()
+    prewarm_task.cancel()
 
     yield
 

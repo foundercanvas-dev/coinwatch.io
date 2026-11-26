@@ -110,38 +110,246 @@ const NEW_WINDOW_SEC = {
 
 const newWindowFor = (tf) => NEW_WINDOW_SEC[tf] || 600;
 
-export async function fetchOrderFlowNewSignals() {
-  const symbols = (await fetchLiquidFuturesSymbols()).slice(0, 12);
-  const tfs = ["5m", "15m"];
-  const nowS = Math.floor(Date.now() / 1000);
-  const fresh = [];
-  const jobs = [];
-  for (const tf of tfs) {
-    for (const sym of symbols) jobs.push({ sym, tf });
+const OF_CACHE_PREFIX = "cw.of.cache.v1.";
+const OF_FRESH_MS = 20_000;
+const OF_STALE_MAX_MS = 300_000;
+const memoryOrderFlowCache = new Map();
+const inflightOrderFlowScans = new Map();
+
+function readOrderFlowCache(tf) {
+  const mem = memoryOrderFlowCache.get(tf);
+  if (mem && Date.now() - mem.updatedAt < OF_STALE_MAX_MS) {
+    return mem;
   }
-  const batchSize = 8;
-  for (let i = 0; i < jobs.length; i += batchSize) {
-    const batch = jobs.slice(i, i + batchSize);
-    const results = await Promise.allSettled(
-      batch.map(async ({ sym, tf }) => {
-        const rows = await fetch(
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=60`,
-        ).then((r) => r.json());
-        const candles = parseBinanceKlines(rows);
-        if (candles.length < 20) return [];
-        const hvn = computeHvnProfile(candles, 50);
-        const atr14 = computeAtr14(candles);
-        const abs = detectAbsorptionSignals(candles, sym, hvn, { includeLive: true });
-        return abs
-          .filter((s) => nowS - (s.time - TZ_SHIFT) <= newWindowFor(tf))
-          .map((s) => ({ ...s, timeframe: tf, atr14 }));
-      }),
-    );
-    for (const r of results) {
-      if (r.status === "fulfilled" && Array.isArray(r.value)) fresh.push(...r.value);
+  try {
+    const raw = localStorage.getItem(`${OF_CACHE_PREFIX}${tf}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && Date.now() - Number(parsed.updatedAt || 0) < OF_STALE_MAX_MS) {
+      memoryOrderFlowCache.set(tf, parsed);
+      return parsed;
     }
-    if (i + batchSize < jobs.length) await new Promise((r) => setTimeout(r, 120));
+  } catch {
+    /* ignore storage errors */
   }
+  return null;
+}
+
+function writeOrderFlowCache(tf, data) {
+  memoryOrderFlowCache.set(tf, data);
+  try {
+    localStorage.setItem(`${OF_CACHE_PREFIX}${tf}`, JSON.stringify(data));
+  } catch {
+    /* ignore quota errors */
+  }
+}
+
+function processOrderFlowSnapshot(snapshot, timeframe) {
+  const targetTfs = timeframe === "all" ? ["1m", "5m", "15m"] : [timeframe];
+  const symbols = Array.isArray(snapshot?.symbols) ? snapshot.symbols : FALLBACK_SYMBOLS;
+  const klinesMap = snapshot?.klines || {};
+  const depthsMap = snapshot?.depths || {};
+  const fundingMap = snapshot?.funding || {};
+
+  let totalInflowUsd = 0;
+  let totalOutflowUsd = 0;
+  const activeMerged = [];
+  const historyMerged = [];
+
+  for (const tf of targetTfs) {
+    for (const sym of symbols) {
+      const rows = klinesMap[`${sym}:${tf}`];
+      if (!Array.isArray(rows) || !rows.length) continue;
+      const candles = parseBinanceKlines(rows);
+      if (candles.length < 20) continue;
+
+      if (tf === targetTfs[0]) {
+        for (const c of candles.slice(-12)) {
+          totalInflowUsd += (c.buyVol || 0) * c.close;
+          totalOutflowUsd += (c.sellVol || 0) * c.close;
+        }
+      }
+
+      const hvn = computeHvnProfile(candles, 50);
+      const { divergence } = computeDeltaAndCVD(candles);
+      const atr14 = computeAtr14(candles);
+      const abs = detectAbsorptionSignals(candles, sym, hvn, {
+        includeStopped: true,
+        includeLive: true,
+      });
+
+      for (const sig of abs) {
+        const item = {
+          ...sig,
+          timeframe: tf,
+          atr14,
+          hasCvdDivergence: Boolean(divergence && divergence.side === sig.side),
+          score: Math.min(99, sig.score + (divergence && divergence.side === sig.side ? 5 : 0)),
+        };
+        if (item.stoppedOut || item.reversed) historyMerged.push(item);
+        else activeMerged.push(item);
+      }
+    }
+  }
+
+  const byKey = new Map();
+  for (const s of activeMerged.sort((a, b) => b.time - a.time)) {
+    const key = `${s.symbol}:${s.timeframe}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, s);
+    } else {
+      historyMerged.push({ ...s, expired: true });
+    }
+  }
+
+  const wallBySym = new Map();
+  for (const [sym, depth] of Object.entries(depthsMap)) {
+    if (depth?.bids && depth?.asks) {
+      const analyzed = analyzeDomHeatmap(depth.bids, depth.asks, new Map(), Date.now(), 0);
+      wallBySym.set(sym, {
+        hasBuyWall: analyzed.buyWalls.length > 0,
+        hasSellWall: analyzed.sellWalls.length > 0,
+        buyCluster: analyzed.buyCluster,
+        sellCluster: analyzed.sellCluster,
+      });
+    }
+  }
+
+  const enrichedActive = [...byKey.values()]
+    .map((s) => {
+      const w = wallBySym.get(s.symbol);
+      const hasWallConfirm = Boolean(w) && (s.side === "LONG" ? w.hasBuyWall : w.hasSellWall);
+      const hasCluster = Boolean(w) && (s.side === "LONG" ? w.buyCluster : w.sellCluster);
+      const fundingRate = Number(fundingMap[s.symbol] || 0);
+      const classified = classifySignalTier(s, {
+        hasWallConfirm,
+        hasCluster,
+        fundingRate,
+      });
+      return {
+        ...s,
+        hasWallConfirm,
+        hasCluster: classified.hasCluster,
+        tier: classified.tier,
+        score: classified.score,
+      };
+    })
+    .filter((s) => s.tier !== "C")
+    .sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier === "A+" ? -1 : 1;
+      return b.time - a.time;
+    });
+
+  return {
+    watchedCount: Number(snapshot?.watchedCount || symbols.length),
+    signals: enrichedActive,
+    historySignals: historyMerged.sort((a, b) => b.time - a.time).slice(0, 60),
+    flowStats: { inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd },
+    updatedAt: Date.now(),
+  };
+}
+
+async function fetchBackendSnapshot(timeframe) {
+  const endpoints = [`/api/orderflow/snapshot?timeframe=${encodeURIComponent(timeframe)}`];
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname !== "coinwatch-io.onrender.com" &&
+    window.location.hostname !== "localhost" &&
+    window.location.hostname !== "127.0.0.1"
+  ) {
+    endpoints.push(
+      `https://coinwatch-io.onrender.com/api/orderflow/snapshot?timeframe=${encodeURIComponent(timeframe)}`,
+    );
+  }
+  for (const url of endpoints) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 7000);
+      const res = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const json = await res.json();
+      if (json && json.klines && Object.keys(json.klines).length > 0) {
+        return json;
+      }
+    } catch {
+      /* try next endpoint */
+    }
+  }
+  return null;
+}
+
+async function runSharedOrderFlowScan(timeframe = "all", { force = false } = {}) {
+  const existing = readOrderFlowCache(timeframe);
+  if (!force && existing && Date.now() - existing.updatedAt < OF_FRESH_MS) {
+    return existing;
+  }
+  if (inflightOrderFlowScans.has(timeframe)) {
+    return inflightOrderFlowScans.get(timeframe);
+  }
+
+  const job = (async () => {
+    // Fast path: 1 shared cached call to backend instead of 120+ per-user Binance calls
+    const snapshot = await fetchBackendSnapshot(timeframe);
+    if (snapshot) {
+      const processed = processOrderFlowSnapshot(snapshot, timeframe);
+      writeOrderFlowCache(timeframe, processed);
+      return processed;
+    }
+
+    // Fallback path: direct throttled Binance scan
+    const allSymbols = await fetchLiquidFuturesSymbols();
+    const targetTfs = timeframe === "all" ? ["1m", "5m", "15m"] : [timeframe];
+    const symbols = allSymbols.slice(0, 40);
+    const klinesMap = {};
+    const batchSize = 12;
+    const jobs = [];
+    for (const tf of targetTfs) {
+      for (const sym of symbols) jobs.push({ sym, tf });
+    }
+    for (let i = 0; i < jobs.length; i += batchSize) {
+      const batch = jobs.slice(i, i + batchSize);
+      const results = await Promise.allSettled(
+        batch.map(async ({ sym, tf }) => {
+          let rows = await fetch(
+            `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=100`,
+          ).then((r) => r.json());
+          if (!Array.isArray(rows)) {
+            rows = await fetch(
+              `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=100`,
+            ).then((r) => r.json());
+          }
+          if (Array.isArray(rows) && rows.length) {
+            klinesMap[`${sym}:${tf}`] = rows;
+          }
+        }),
+      );
+      void results;
+      if (i + batchSize < jobs.length) await new Promise((r) => setTimeout(r, 120));
+    }
+
+    const processed = processOrderFlowSnapshot(
+      { watchedCount: symbols.length, symbols, klines: klinesMap, depths: {}, funding: {} },
+      timeframe,
+    );
+    writeOrderFlowCache(timeframe, processed);
+    return processed;
+  })();
+
+  inflightOrderFlowScans.set(timeframe, job);
+  try {
+    return await job;
+  } finally {
+    inflightOrderFlowScans.delete(timeframe);
+  }
+}
+
+export async function fetchOrderFlowNewSignals() {
+  const result = await runSharedOrderFlowScan("all");
+  const nowS = Math.floor(Date.now() / 1000);
+  const fresh = (result.signals || []).filter(
+    (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
+  );
   return fresh.sort((a, b) => b.time - a.time);
 }
 
@@ -190,13 +398,18 @@ export default function OrderFlowView({
   popupsEnabled = true,
   onTogglePopups,
 }) {
+  const initialCache = useMemo(() => readOrderFlowCache("all"), []);
   const [timeframe, setTimeframe] = useState("all");
   const [tab, setTab] = useState("new"); // new | active | history
-  const [watchedCount, setWatchedCount] = useState(FALLBACK_SYMBOLS.length);
-  const [signals, setSignals] = useState([]);
-  const [historySignals, setHistorySignals] = useState([]);
-  const [flowStats, setFlowStats] = useState({ inflowUsd: 0, outflowUsd: 0 });
-  const [scanning, setScanning] = useState(true);
+  const [watchedCount, setWatchedCount] = useState(
+    () => initialCache?.watchedCount || FALLBACK_SYMBOLS.length,
+  );
+  const [signals, setSignals] = useState(() => initialCache?.signals || []);
+  const [historySignals, setHistorySignals] = useState(() => initialCache?.historySignals || []);
+  const [flowStats, setFlowStats] = useState(
+    () => initialCache?.flowStats || { inflowUsd: 0, outflowUsd: 0 },
+  );
+  const [scanning, setScanning] = useState(() => !initialCache);
   const [selectedSignal, setSelectedSignal] = useState(initialSignal || null);
   const [sideFilter, setSideFilter] = useState("all");
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
@@ -213,168 +426,42 @@ export default function OrderFlowView({
     return () => clearInterval(t);
   }, []);
 
-  // Background scanner across liquid Binance Futures pairs & timeframes
-  const scanMarkets = useCallback(async () => {
-    setScanning(true);
-    try {
-      const allSymbols = await fetchLiquidFuturesSymbols();
-      const targetTfs = timeframe === "all" ? ["1m", "5m", "15m"] : [timeframe];
-      const symbols = allSymbols.slice(0, 40);
-      setWatchedCount(symbols.length);
-
-      let totalInflowUsd = 0;
-      let totalOutflowUsd = 0;
-      const activeMerged = [];
-      const historyMerged = [];
-
-      const jobs = [];
-      for (const tf of targetTfs) {
-        for (const sym of symbols) {
-          jobs.push({ sym, tf });
-        }
+  // Shared cached scanner across liquid Binance Futures pairs & timeframes
+  const scanMarkets = useCallback(
+    async (force = false) => {
+      const cached = readOrderFlowCache(timeframe);
+      if (cached) {
+        setWatchedCount(cached.watchedCount);
+        setSignals(cached.signals);
+        setHistorySignals(cached.historySignals);
+        setFlowStats(cached.flowStats);
+        setScanning(false);
+      } else {
+        setScanning(true);
       }
-
-      const batchSize = 12;
-      for (let i = 0; i < jobs.length; i += batchSize) {
-        const batch = jobs.slice(i, i + batchSize);
-        const results = await Promise.allSettled(
-          batch.map(async ({ sym, tf }) => {
-            let rows = await fetch(
-              `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=100`,
-            ).then((r) => r.json());
-            if (!Array.isArray(rows)) {
-              rows = await fetch(
-                `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=100`,
-              ).then((r) => r.json());
-            }
-            const candles = parseBinanceKlines(rows);
-            if (candles.length < 20) return [];
-
-            // Sum recent 12 candles buy/sell USD flow once per symbol (from primary TF)
-            if (tf === targetTfs[0]) {
-              for (const c of candles.slice(-12)) {
-                totalInflowUsd += (c.buyVol || 0) * c.close;
-                totalOutflowUsd += (c.sellVol || 0) * c.close;
-              }
-            }
-
-            const hvn = computeHvnProfile(candles, 50);
-            const { divergence } = computeDeltaAndCVD(candles);
-            const atr14 = computeAtr14(candles);
-            const abs = detectAbsorptionSignals(candles, sym, hvn, {
-              includeStopped: true,
-              includeLive: true,
-            });
-
-            return abs.map((sig) => ({
-              ...sig,
-              timeframe: tf,
-              atr14,
-              hasCvdDivergence: Boolean(divergence && divergence.side === sig.side),
-              score: Math.min(99, sig.score + (divergence && divergence.side === sig.side ? 5 : 0)),
-            }));
-          }),
+      try {
+        const result = await runSharedOrderFlowScan(timeframe, { force });
+        setWatchedCount(result.watchedCount);
+        setSignals(result.signals);
+        setHistorySignals(result.historySignals);
+        setFlowStats(result.flowStats);
+        const nowS = Math.floor(Date.now() / 1000);
+        const freshNew = (result.signals || []).filter(
+          (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
         );
-
-        for (const res of results) {
-          if (res.status === "fulfilled" && Array.isArray(res.value)) {
-            for (const s of res.value) {
-              if (s.stoppedOut || s.reversed) historyMerged.push(s);
-              else activeMerged.push(s);
-            }
-          }
-        }
-        if (i + batchSize < jobs.length) await new Promise((r) => setTimeout(r, 120));
+        if (freshNew.length) onNewSignals?.(freshNew);
+      } catch {
+        /* keep previous/cached signals */
+      } finally {
+        setScanning(false);
       }
-
-      setFlowStats({ inflowUsd: totalInflowUsd, outflowUsd: totalOutflowUsd });
-
-      // Keep latest active signal per (symbol + timeframe); older ones move to History
-      const byKey = new Map();
-      for (const s of activeMerged.sort((a, b) => b.time - a.time)) {
-        const key = `${s.symbol}:${s.timeframe}`;
-        if (!byKey.has(key)) {
-          byKey.set(key, s);
-        } else {
-          historyMerged.push({ ...s, expired: true });
-        }
-      }
-      // Order Book Wall + Cluster + Funding Rate confirmation in background for active candidates
-      const activeList = [...byKey.values()];
-      const uniqueActiveSyms = [...new Set(activeList.map((s) => s.symbol))].slice(0, 24);
-      const wallBySym = new Map();
-      const fundingBySym = new Map();
-
-      await Promise.allSettled([
-        fetch("https://fapi.binance.com/fapi/v1/premiumIndex")
-          .then((r) => r.json())
-          .then((rows) => {
-            if (Array.isArray(rows)) {
-              for (const row of rows) {
-                if (row?.symbol) fundingBySym.set(row.symbol, Number(row.lastFundingRate || 0));
-              }
-            }
-          }),
-        ...uniqueActiveSyms.map(async (sym) => {
-          const depth = await fetch(
-            `https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=25`,
-          ).then((r) => r.json());
-          if (depth?.bids && depth?.asks) {
-            const analyzed = analyzeDomHeatmap(depth.bids, depth.asks, new Map(), Date.now(), 0);
-            wallBySym.set(sym, {
-              hasBuyWall: analyzed.buyWalls.length > 0,
-              hasSellWall: analyzed.sellWalls.length > 0,
-              buyCluster: analyzed.buyCluster,
-              sellCluster: analyzed.sellCluster,
-            });
-          }
-        }),
-      ]);
-
-      const enrichedActive = activeList
-        .map((s) => {
-          const w = wallBySym.get(s.symbol);
-          const hasWallConfirm =
-            Boolean(w) && (s.side === "LONG" ? w.hasBuyWall : w.hasSellWall);
-          const hasCluster =
-            Boolean(w) && (s.side === "LONG" ? w.buyCluster : w.sellCluster);
-          const fundingRate = fundingBySym.get(s.symbol) || 0;
-          const classified = classifySignalTier(s, {
-            hasWallConfirm,
-            hasCluster,
-            fundingRate,
-          });
-          return {
-            ...s,
-            hasWallConfirm,
-            hasCluster: classified.hasCluster,
-            tier: classified.tier,
-            score: classified.score,
-          };
-        })
-        .filter((s) => s.tier !== "C");
-
-      const sorted = enrichedActive.sort((a, b) => {
-        if (a.tier !== b.tier) return a.tier === "A+" ? -1 : 1;
-        return b.time - a.time;
-      });
-      setSignals(sorted);
-      setHistorySignals(historyMerged.sort((a, b) => b.time - a.time).slice(0, 60));
-      const nowS = Math.floor(Date.now() / 1000);
-      const freshNew = sorted.filter(
-        (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
-      );
-      if (freshNew.length) onNewSignals?.(freshNew);
-    } catch {
-      /* keep previous signals */
-    } finally {
-      setScanning(false);
-    }
-  }, [timeframe]);
+    },
+    [timeframe],
+  );
 
   useEffect(() => {
-    scanMarkets();
-    const timer = setInterval(scanMarkets, 45000);
+    scanMarkets(false);
+    const timer = setInterval(() => scanMarkets(true), 40000);
     return () => clearInterval(timer);
   }, [scanMarkets]);
 

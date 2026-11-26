@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel as PydanticBaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
+import asyncio
+import httpx
 import time
 import uuid
 
@@ -335,6 +338,168 @@ async def remove_favorite(exchange: str, symbol: str):
     if not removed:
         raise HTTPException(status_code=404, detail="Symbol not in favorites")
     return {"ok": True}
+
+
+# ── Shared Order Flow Snapshot Cache ─────────────────────────────────────
+
+_OF_FALLBACK_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+    "AVAXUSDT", "LINKUSDT", "SUIUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT",
+]
+_OF_SNAPSHOT_TTL_SEC = 35.0
+_OF_SYMBOLS_TTL_SEC = 300.0
+_of_symbols_cache: Dict[str, Any] = {"symbols": list(_OF_FALLBACK_SYMBOLS), "ts": 0.0}
+_of_snapshot_cache: Dict[str, Dict[str, Any]] = {}
+_of_snapshot_locks: Dict[str, asyncio.Lock] = {}
+
+
+async def _fetch_liquid_of_symbols(client: httpx.AsyncClient) -> List[str]:
+    now = time.time()
+    if now - _of_symbols_cache["ts"] < _OF_SYMBOLS_TTL_SEC and _of_symbols_cache["symbols"]:
+        return _of_symbols_cache["symbols"]
+    try:
+        resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=6.0)
+        if resp.status_code == 200:
+            rows = resp.json()
+            if isinstance(rows, list):
+                liquid = [
+                    r["symbol"]
+                    for r in sorted(
+                        (
+                            t for t in rows
+                            if isinstance(t.get("symbol"), str)
+                            and t["symbol"].endswith("USDT")
+                            and "_" not in t["symbol"]
+                            and float(t.get("quoteVolume") or 0) >= 5_000_000
+                        ),
+                        key=lambda t: float(t.get("quoteVolume") or 0),
+                        reverse=True,
+                    )[:40]
+                ]
+                if len(liquid) >= 12:
+                    _of_symbols_cache["symbols"] = liquid
+                    _of_symbols_cache["ts"] = now
+                    return liquid
+    except Exception:
+        pass
+    return _of_symbols_cache["symbols"] or list(_OF_FALLBACK_SYMBOLS)
+
+
+async def _fetch_of_klines(client: httpx.AsyncClient, sem: asyncio.Semaphore, sym: str, tf: str):
+    async with sem:
+        for url in (
+            f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={tf}&limit=100",
+            f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={tf}&limit=100",
+        ):
+            try:
+                resp = await client.get(url, timeout=6.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list) and data:
+                        return f"{sym}:{tf}", [r[:10] for r in data]
+            except Exception:
+                continue
+        return f"{sym}:{tf}", None
+
+
+async def _fetch_of_depth(client: httpx.AsyncClient, sem: asyncio.Semaphore, sym: str):
+    async with sem:
+        try:
+            resp = await client.get(
+                f"https://fapi.binance.com/fapi/v1/depth?symbol={sym}&limit=25",
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("bids") and data.get("asks"):
+                    return sym, {"bids": data["bids"], "asks": data["asks"]}
+        except Exception:
+            pass
+        return sym, None
+
+
+async def build_orderflow_snapshot(timeframe: str = "all") -> Dict[str, Any]:
+    tf_key = timeframe if timeframe in ("all", "1m", "3m", "5m", "15m", "1h", "4h", "1d") else "all"
+    now = time.time()
+    cached = _of_snapshot_cache.get(tf_key)
+    if cached and (now - cached["fetched_at"]) < _OF_SNAPSHOT_TTL_SEC:
+        return cached["payload"]
+
+    lock = _of_snapshot_locks.setdefault(tf_key, asyncio.Lock())
+    async with lock:
+        now = time.time()
+        cached = _of_snapshot_cache.get(tf_key)
+        if cached and (now - cached["fetched_at"]) < _OF_SNAPSHOT_TTL_SEC:
+            return cached["payload"]
+
+        target_tfs = ["1m", "5m", "15m"] if tf_key == "all" else [tf_key]
+        sem = asyncio.Semaphore(10)
+        async with httpx.AsyncClient() as client:
+            symbols = await _fetch_liquid_of_symbols(client)
+            kline_tasks = [
+                _fetch_of_klines(client, sem, sym, tf)
+                for tf in target_tfs
+                for sym in symbols
+            ]
+            depth_tasks = [_fetch_of_depth(client, sem, sym) for sym in symbols[:20]]
+            funding_task = client.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=5.0)
+
+            kline_results, depth_results, funding_res = await asyncio.gather(
+                asyncio.gather(*kline_tasks, return_exceptions=True),
+                asyncio.gather(*depth_tasks, return_exceptions=True),
+                funding_task,
+                return_exceptions=True,
+            )
+
+        klines: Dict[str, list] = {}
+        if isinstance(kline_results, list):
+            for item in kline_results:
+                if isinstance(item, tuple) and item[1]:
+                    klines[item[0]] = item[1]
+
+        depths: Dict[str, dict] = {}
+        if isinstance(depth_results, list):
+            for item in depth_results:
+                if isinstance(item, tuple) and item[1]:
+                    depths[item[0]] = item[1]
+
+        funding: Dict[str, float] = {}
+        sym_set = set(symbols)
+        if not isinstance(funding_res, Exception) and getattr(funding_res, "status_code", 0) == 200:
+            try:
+                for row in funding_res.json():
+                    sym = row.get("symbol")
+                    if sym in sym_set:
+                        funding[sym] = float(row.get("lastFundingRate") or 0.0)
+            except Exception:
+                pass
+
+        # If Binance failed completely, keep previous stale cache instead of overwriting with empty
+        if not klines and cached:
+            return cached["payload"]
+
+        payload = {
+            "ts": int(time.time() * 1000),
+            "ttl": int(_OF_SNAPSHOT_TTL_SEC),
+            "timeframe": tf_key,
+            "watchedCount": len(symbols),
+            "symbols": symbols,
+            "klines": klines,
+            "depths": depths,
+            "funding": funding,
+        }
+        _of_snapshot_cache[tf_key] = {"fetched_at": time.time(), "payload": payload}
+        return payload
+
+
+@router.get("/orderflow/snapshot")
+async def get_orderflow_snapshot(timeframe: str = Query("all")):
+    """Shared cached Order Flow snapshot so all users share one upstream Binance scan."""
+    payload = await build_orderflow_snapshot(timeframe)
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "public, max-age=25, stale-while-revalidate=35"},
+    )
 
 
 # ── Health ───────────────────────────────────────────────────────────────
