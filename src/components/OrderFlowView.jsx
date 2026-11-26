@@ -39,6 +39,14 @@ const FALLBACK_SYMBOLS = [
   "OPUSDT",
 ];
 
+const EXCLUDED_OF_SYMBOLS = new Set([
+  "USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "USDPUSDT", "BUSDUSDT", "DAIUSDT", "USD1USDT", "EURUSDT",
+  "XAUUSDT", "XAGUSDT", "SPYUSDT", "QQQUSDT", "TQQQUSDT", "SOXLUSDT", "SOXSUSDT",
+  "NVDAUSDT", "AMDUSDT", "INTCUSDT", "GOOGLUSDT", "MSTRUSDT", "SPCXUSDT", "SNDKUSDT",
+  "SKHYNIXUSDT", "SKHYUSDT", "MUUSDT", "NBISUSDT", "EWYUSDT", "KORUUSDT", "SAMSUNGUSDT",
+  "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT",
+]);
+
 let cachedFuturesSymbols = null;
 let cachedSymbolsAt = 0;
 
@@ -57,10 +65,12 @@ async function fetchLiquidFuturesSymbols() {
             typeof t.symbol === "string" &&
             t.symbol.endsWith("USDT") &&
             !t.symbol.includes("_") &&
-            Number(t.quoteVolume) >= 5_000_000,
+            !EXCLUDED_OF_SYMBOLS.has(t.symbol) &&
+            Number(t.quoteVolume) >= 15_000_000 &&
+            Number(t.count || 0) >= 15_000,
         )
         .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
-        .slice(0, 80)
+        .slice(0, 120)
         .map((t) => t.symbol);
       if (liquid.length >= 12) {
         cachedFuturesSymbols = liquid;
@@ -289,7 +299,7 @@ async function runSharedOrderFlowScan(timeframe = "all", { force = false } = {})
     // Fallback path: direct throttled Binance scan
     const allSymbols = await fetchLiquidFuturesSymbols();
     const targetTfs = timeframe === "all" ? ["1m", "5m", "15m"] : [timeframe];
-    const symbols = allSymbols.slice(0, 40);
+    const symbols = allSymbols.slice(0, 120);
     const klinesMap = {};
     const batchSize = 12;
     const jobs = [];

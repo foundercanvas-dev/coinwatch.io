@@ -346,7 +346,14 @@ _OF_FALLBACK_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
     "AVAXUSDT", "LINKUSDT", "SUIUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT",
 ]
-_OF_SNAPSHOT_TTL_SEC = 35.0
+_OF_EXCLUDED_SYMBOLS = {
+    "USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "USDPUSDT", "BUSDUSDT", "DAIUSDT", "USD1USDT", "EURUSDT",
+    "XAUUSDT", "XAGUSDT", "SPYUSDT", "QQQUSDT", "TQQQUSDT", "SOXLUSDT", "SOXSUSDT",
+    "NVDAUSDT", "AMDUSDT", "INTCUSDT", "GOOGLUSDT", "MSTRUSDT", "SPCXUSDT", "SNDKUSDT",
+    "SKHYNIXUSDT", "SKHYUSDT", "MUUSDT", "NBISUSDT", "EWYUSDT", "KORUUSDT", "SAMSUNGUSDT",
+    "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT",
+}
+_OF_SNAPSHOT_TTL_SEC = 45.0
 _OF_SYMBOLS_TTL_SEC = 300.0
 _of_symbols_cache: Dict[str, Any] = {"symbols": list(_OF_FALLBACK_SYMBOLS), "ts": 0.0}
 _of_snapshot_cache: Dict[str, Dict[str, Any]] = {}
@@ -370,11 +377,13 @@ async def _fetch_liquid_of_symbols(client: httpx.AsyncClient) -> List[str]:
                             if isinstance(t.get("symbol"), str)
                             and t["symbol"].endswith("USDT")
                             and "_" not in t["symbol"]
-                            and float(t.get("quoteVolume") or 0) >= 5_000_000
+                            and t["symbol"] not in _OF_EXCLUDED_SYMBOLS
+                            and float(t.get("quoteVolume") or 0) >= 15_000_000
+                            and int(t.get("count") or 0) >= 15_000
                         ),
                         key=lambda t: float(t.get("quoteVolume") or 0),
                         reverse=True,
-                    )[:40]
+                    )[:120]
                 ]
                 if len(liquid) >= 12:
                     _of_symbols_cache["symbols"] = liquid
@@ -433,7 +442,7 @@ async def build_orderflow_snapshot(timeframe: str = "all") -> Dict[str, Any]:
             return cached["payload"]
 
         target_tfs = ["1m", "5m", "15m"] if tf_key == "all" else [tf_key]
-        sem = asyncio.Semaphore(10)
+        sem = asyncio.Semaphore(16)
         async with httpx.AsyncClient() as client:
             symbols = await _fetch_liquid_of_symbols(client)
             kline_tasks = [
