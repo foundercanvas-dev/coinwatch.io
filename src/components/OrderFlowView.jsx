@@ -997,8 +997,35 @@ function OrderFlowSignalChart({
     let reconnectTimer = null;
     const connect = () => {
       if (!alive) return;
+      let pendingPrice = null;
+      let pendingVol = null;
+      let pendingDom = null;
+      let circleRaf = 0;
+      const scheduleCircles = () => {
+        if (circleRaf) return;
+        circleRaf = requestAnimationFrame(() => {
+          circleRaf = 0;
+          drawAbsorptionCircles();
+        });
+      };
+      const uiFlushTimer = setInterval(() => {
+        if (!alive) return;
+        if (pendingPrice !== null) {
+          setLastPrice(pendingPrice);
+          pendingPrice = null;
+        }
+        if (pendingVol !== null) {
+          setLiveVol(pendingVol);
+          pendingVol = null;
+        }
+        if (pendingDom !== null) {
+          setDom(pendingDom);
+          pendingDom = null;
+        }
+      }, 100);
+
       ws = new WebSocket(
-        `wss://fstream.binance.com/stream?streams=${symLower}@aggTrade/${symLower}@depth20@100ms/${symLower}@kline_${chartIv}`,
+        `wss://fstream.binance.com/stream?streams=${symLower}@trade/${symLower}@depth20@100ms/${symLower}@kline_${chartIv}`,
       );
       ws.onopen = () => alive && setLive(true);
       ws.onmessage = (evt) => {
@@ -1009,14 +1036,14 @@ function OrderFlowSignalChart({
           const data = msg.data;
           if (!data) return;
 
-          if (stream.endsWith("@aggTrade")) {
+          if (stream.endsWith("@trade") || stream.endsWith("@aggTrade")) {
             const price = Number(data.p);
             const qty = Number(data.q);
             const isSell = Boolean(data.m);
-            const tradeSec = Math.floor(Number(data.T || Date.now()) / 1000);
+            const tradeSec = Math.floor(Number(data.T || data.E || Date.now()) / 1000);
             const bucketTime = Math.floor(tradeSec / ivSec) * ivSec + TZ_SHIFT;
             if (!(price > 0)) return;
-            setLastPrice(price);
+            pendingPrice = price;
             const list = candlesRef.current;
             if (list.length) {
               const last = list[list.length - 1];
@@ -1031,35 +1058,32 @@ function OrderFlowSignalChart({
                   buyVol: isSell ? 0 : qty,
                   sellVol: isSell ? qty : 0,
                 };
-                candlesRef.current = [...list, newBar].slice(-200);
-                setLiveVol({
+                list.push(newBar);
+                if (list.length > 200) list.shift();
+                pendingVol = {
                   buyUsd: newBar.buyVol * price,
                   sellUsd: newBar.sellVol * price,
-                });
+                };
                 try {
                   seriesRef.current?.update(newBar);
-                  requestAnimationFrame(drawAbsorptionCircles);
+                  scheduleCircles();
                 } catch {
                   /* ignore */
                 }
               } else if (bucketTime === last.time) {
-                const updatedLast = {
-                  ...last,
-                  close: price,
-                  high: Math.max(last.high, price),
-                  low: Math.min(last.low, price),
-                  volume: last.volume + qty,
-                  buyVol: last.buyVol + (isSell ? 0 : qty),
-                  sellVol: last.sellVol + (isSell ? qty : 0),
+                last.close = price;
+                if (price > last.high) last.high = price;
+                if (price < last.low) last.low = price;
+                last.volume += qty;
+                if (isSell) last.sellVol += qty;
+                else last.buyVol += qty;
+                pendingVol = {
+                  buyUsd: last.buyVol * price,
+                  sellUsd: last.sellVol * price,
                 };
-                candlesRef.current = [...list.slice(0, -1), updatedLast];
-                setLiveVol({
-                  buyUsd: updatedLast.buyVol * price,
-                  sellUsd: updatedLast.sellVol * price,
-                });
                 try {
-                  seriesRef.current?.update(updatedLast);
-                  requestAnimationFrame(drawAbsorptionCircles);
+                  seriesRef.current?.update(last);
+                  scheduleCircles();
                 } catch {
                   /* ignore */
                 }
@@ -1074,7 +1098,7 @@ function OrderFlowSignalChart({
               Date.now(),
               curPrice,
             );
-            setDom(analyzed);
+            pendingDom = analyzed;
             if (analyzed.spoofs.length) {
               setSpoofLog((prev) => [...analyzed.spoofs, ...prev].slice(0, 6));
             }
@@ -1094,31 +1118,41 @@ function OrderFlowSignalChart({
               buyVol,
               sellVol: Math.max(0, vol - buyVol),
             };
-            setLastPrice(bar.close);
-            setLiveVol({
-              buyUsd: bar.buyVol * bar.close,
-              sellUsd: bar.sellVol * bar.close,
-            });
             const list = candlesRef.current;
             const last = list[list.length - 1];
-            if (!last || t >= last.time) {
-              const idx = list.findIndex((b) => b.time === t);
-              const updated =
-                idx >= 0 ? [...list.slice(0, idx), bar, ...list.slice(idx + 1)] : [...list, bar].slice(-200);
-              candlesRef.current = updated;
-              if (k.x) {
-                const hvn = computeHvnProfile(updated, 50);
-                const allAbs = detectAbsorptionSignals(updated, sym, hvn, { includeStopped: true, includeLive: true });
-                const list = [...allAbs];
-                if (chartIv === signal.timeframe && !list.some((s) => s.time === signal.time && s.side === signal.side)) {
-                  list.unshift(signal);
-                }
-                absorptionsRef.current = list;
-                setAbsorptions(list);
-              }
+            if (!last || t > last.time) {
+              list.push(bar);
+              if (list.length > 200) list.shift();
+              pendingPrice = bar.close;
+              pendingVol = { buyUsd: bar.buyVol * bar.close, sellUsd: bar.sellVol * bar.close };
               try {
                 seriesRef.current?.update(bar);
-                requestAnimationFrame(drawAbsorptionCircles);
+                scheduleCircles();
+              } catch {
+                /* ignore */
+              }
+            } else if (t === last.time) {
+              // Sync official open/high/low/volume without snapping live tick price backwards
+              last.open = bar.open;
+              last.high = Math.max(last.high, bar.high);
+              last.low = Math.min(last.low, bar.low);
+              last.volume = Math.max(last.volume, bar.volume);
+              last.buyVol = Math.max(last.buyVol, bar.buyVol);
+              last.sellVol = Math.max(last.sellVol, bar.sellVol);
+              if (k.x) {
+                last.close = bar.close;
+                const hvn = computeHvnProfile(list, 50);
+                const allAbs = detectAbsorptionSignals(list, sym, hvn, { includeStopped: true, includeLive: true });
+                const nextAbs = [...allAbs];
+                if (chartIv === signal.timeframe && !nextAbs.some((s) => s.time === signal.time && s.side === signal.side)) {
+                  nextAbs.unshift(signal);
+                }
+                absorptionsRef.current = nextAbs;
+                setAbsorptions(nextAbs);
+              }
+              try {
+                seriesRef.current?.update(last);
+                scheduleCircles();
               } catch {
                 /* ignore */
               }
@@ -1129,9 +1163,11 @@ function OrderFlowSignalChart({
         }
       };
       ws.onclose = () => {
+        clearInterval(uiFlushTimer);
+        if (circleRaf) cancelAnimationFrame(circleRaf);
         if (!alive) return;
         setLive(false);
-        reconnectTimer = setTimeout(connect, 2500);
+        reconnectTimer = setTimeout(connect, 1500);
       };
       ws.onerror = () => ws?.close();
     };
