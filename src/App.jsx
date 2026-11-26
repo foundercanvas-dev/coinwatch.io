@@ -14,8 +14,33 @@ import CoinIcon from "./components/CoinIcon";
 import { fmtPrice, fmtTime } from "./lib/format";
 import { rewardRatioFor, SENSITIVITY_POLICY } from "./lib/signalPolicy";
 
+const NAV_TO_PATH = {
+  pump_dump: "scanner",
+  order_flow: "orderflow",
+  correlation: "correlation",
+  poa: "poa",
+  markets: "markets",
+  settings: "settings",
+};
+
+function resolveInitialNav() {
+  try {
+    const h = window.location.hash.replace(/^#\/?/, "");
+    const [path] = h.split("?");
+    const [seg] = path.split("/");
+    if (seg === "market") return "market";
+    const fromHash = Object.entries(NAV_TO_PATH).find(([, v]) => v === seg)?.[0];
+    if (fromHash) return fromHash;
+    const saved = localStorage.getItem("cw.active_nav");
+    if (saved && NAV_TO_PATH[saved]) return saved;
+  } catch {
+    /* ignore */
+  }
+  return "pump_dump";
+}
+
 export default function App() {
-  const [activeNav, setActiveNavState] = useState("pump_dump"); // 'pump_dump' | 'correlation' | 'poa' | 'markets' | 'settings' | 'market'
+  const [activeNav, setActiveNavState] = useState(resolveInitialNav); // 'pump_dump' | 'correlation' | 'poa' | 'markets' | 'settings' | 'market'
   const [sensitivity, setSensitivity] = useState(SENSITIVITY_POLICY.default_pct);
   const [timeframe, setTimeframe] = useState("1m"); // '1m' | '5m' | '15m' | '1h' | '4h'
   const [minLiquidity, setMinLiquidity] = useState(0);
@@ -95,17 +120,14 @@ export default function App() {
   const [returnNav, setReturnNav] = useState("pump_dump");
   const [poaTargetCoin, setPoaTargetCoin] = useState(null);
 
-  // Hash routing: #/scanner, #/correlation, #/poa, #/markets, #/settings, #/market/SYMBOL
-  const NAV_TO_PATH = {
-    pump_dump: "scanner",
-    order_flow: "orderflow",
-    correlation: "correlation",
-    poa: "poa",
-    markets: "markets",
-    settings: "settings",
-  };
+  // Hash routing: #/scanner, #/orderflow, #/correlation, #/poa, #/markets, #/settings, #/market/SYMBOL
   const setActiveNav = (nav) => {
     setActiveNavState(nav);
+    try {
+      if (NAV_TO_PATH[nav]) localStorage.setItem("cw.active_nav", nav);
+    } catch {
+      /* ignore */
+    }
     if (NAV_TO_PATH[nav]) window.location.hash = `/${NAV_TO_PATH[nav]}`;
   };
   const openMarket = (coin) => {
@@ -131,7 +153,14 @@ export default function App() {
         return;
       }
       const nav = Object.entries(NAV_TO_PATH).find(([, v]) => v === seg)?.[0];
-      if (nav) setActiveNavState(nav);
+      if (nav) {
+        setActiveNavState(nav);
+        try {
+          localStorage.setItem("cw.active_nav", nav);
+        } catch {
+          /* ignore */
+        }
+      }
     };
     apply();
     window.addEventListener("hashchange", apply);
@@ -539,7 +568,7 @@ export default function App() {
       {orderFlowToast && popupsEnabled && (
         <div
           key={orderFlowToast.id}
-          className={`fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl overflow-hidden space-y-3 cw-toast-in ${
+          className={`fixed top-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl overflow-hidden space-y-3 cw-toast-in ${
             orderFlowToast.side === "LONG"
               ? "!border-mint/50 cw-vol-high-up"
               : "!border-coral/50 cw-vol-high-down"

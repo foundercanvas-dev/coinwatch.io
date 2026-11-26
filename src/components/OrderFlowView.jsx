@@ -1537,7 +1537,7 @@ function OrderFlowSignalChart({
 
         return (
           <div
-            className={`fixed bottom-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl overflow-hidden space-y-3 cw-toast-in ${
+            className={`fixed top-5 right-5 z-50 w-[340px] max-w-[calc(100vw-2rem)] cw-panel cw-glow p-4 shadow-2xl overflow-hidden space-y-3 cw-toast-in ${
               reversalSignal
                 ? "!border-terminal-yellow/50 cw-vol-mid-up"
                 : "!border-coral/50 cw-vol-high-down"
