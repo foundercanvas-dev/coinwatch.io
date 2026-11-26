@@ -348,8 +348,26 @@ async function runSharedOrderFlowScan(timeframe = "all", { force = false } = {})
   }
 }
 
+let didPrefetchAllTfs = false;
+function prefetchAllOrderFlowTimeframes() {
+  if (didPrefetchAllTfs) return;
+  didPrefetchAllTfs = true;
+  (async () => {
+    for (const tf of ["3m", "1h", "4h", "1d"]) {
+      if (!readOrderFlowCache(tf)) {
+        try {
+          await runSharedOrderFlowScan(tf);
+        } catch {
+          /* ignore background prefetch errors */
+        }
+      }
+    }
+  })();
+}
+
 export async function fetchOrderFlowNewSignals() {
   const result = await runSharedOrderFlowScan("all");
+  prefetchAllOrderFlowTimeframes();
   const nowS = Math.floor(Date.now() / 1000);
   const fresh = (result.signals || []).filter(
     (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
@@ -414,6 +432,7 @@ export default function OrderFlowView({
     () => initialCache?.flowStats || { inflowUsd: 0, outflowUsd: 0 },
   );
   const [scanning, setScanning] = useState(() => !initialCache);
+  const [hasConnectedOnce, setHasConnectedOnce] = useState(() => Boolean(initialCache));
   const [selectedSignal, setSelectedSignal] = useState(initialSignal || null);
   const [sideFilter, setSideFilter] = useState("all");
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
@@ -455,6 +474,8 @@ export default function OrderFlowView({
         setSignals(result.signals);
         setHistorySignals(result.historySignals);
         setFlowStats(result.flowStats);
+        setHasConnectedOnce(true);
+        prefetchAllOrderFlowTimeframes();
         const nowS = Math.floor(Date.now() / 1000);
         const freshNew = (result.signals || []).filter(
           (s) => s.tier === "A+" && nowS - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
@@ -551,7 +572,7 @@ export default function OrderFlowView({
                 </span>
               </button>
             )}
-            <LivePill isConnected={!scanning || signals.length > 0} />
+            <LivePill isConnected={hasConnectedOnce || !scanning || signals.length > 0} />
           </div>
         }
       />
