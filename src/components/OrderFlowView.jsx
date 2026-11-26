@@ -930,7 +930,16 @@ function OrderFlowSignalChart({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Draw Horizontal Volume Profile / HVN bars behind candles on hvnCanvas
+    // 1. Draw Horizontal Volume Profile / HVN zones behind candles on hvnCanvas
+    const ts = chart.timeScale();
+    const curList = candlesRef.current;
+    const lastBarTime = curList.length ? curList[curList.length - 1].time : null;
+    const xLastRaw = lastBarTime != null ? ts.timeToCoordinate(lastBarTime) : null;
+    const zoneEndX =
+      xLastRaw != null && Number.isFinite(xLastRaw)
+        ? Math.max(width * 0.58, Math.min(width - 74, xLastRaw + 10))
+        : width - 84;
+
     const { bins, hvnsWithReaction, maxVol } = hvnDataRef.current;
     const hvnByIdx = new Map(hvnsWithReaction.map((h) => [h.index, h]));
     if (hvnCanvas) {
@@ -942,24 +951,25 @@ function OrderFlowSignalChart({
       hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       hctx.clearRect(0, 0, width, height);
 
-      const maxBarWidth = width * 0.48;
+      const histMaxW = width * 0.18;
       for (const bin of bins) {
         const yTop = series.priceToCoordinate(bin.high);
         const yBot = series.priceToCoordinate(bin.low);
         if (yTop == null || yBot == null || !Number.isFinite(yTop) || !Number.isFinite(yBot)) continue;
         const rawH = Math.abs(yBot - yTop);
         const top = Math.min(yTop, yBot);
-        const barW = maxVol > 0 ? Math.max(16, (bin.volume / maxVol) * maxBarWidth) : 16;
         const hvnEntry = hvnByIdx.get(bin.index);
 
         if (hvnEntry) {
+          // HVN & POC zones stretch all the way across to the live candle/price zone like ATAS
           const barH = Math.max(hvnEntry.isPoc ? 16 : 13, rawH * 0.9);
           const yDraw = top + (rawH - barH) / 2;
           hctx.fillStyle = hvnEntry.isPoc
-            ? "rgba(180, 108, 24, 0.44)"
-            : "rgba(128, 92, 32, 0.32)";
-          hctx.fillRect(0, yDraw, barW, barH);
+            ? "rgba(180, 108, 24, 0.42)"
+            : "rgba(128, 92, 32, 0.28)";
+          hctx.fillRect(0, yDraw, zoneEndX, barH);
         } else {
+          const barW = maxVol > 0 ? Math.max(6, (bin.volume / maxVol) * histMaxW) : 6;
           const barH = Math.max(1.5, Math.min(3, rawH * 0.35));
           const yDraw = top + (rawH - barH) / 2;
           hctx.fillStyle = "rgba(156, 163, 175, 0.06)";
@@ -968,10 +978,9 @@ function OrderFlowSignalChart({
       }
     }
 
-    // 2. Draw clean ATAS-style X Data + Reaction History inside right end of each HVN bar
+    // 2. Draw clean ATAS-style X Data + Reaction History at the right end of each HVN zone
     const hitboxes = [];
     const placedPillYs = [];
-    const maxBarWidth = width * 0.48;
     const sortedHvns = [...hvnsWithReaction].sort((a, b) => {
       if (a.isPoc !== b.isPoc) return a.isPoc ? -1 : 1;
       return b.volume - a.volume;
@@ -983,10 +992,9 @@ function OrderFlowSignalChart({
       const yMid = series.priceToCoordinate(bin.price);
       if (yMid == null || !Number.isFinite(yMid)) continue;
 
-      const barW = maxVol > 0 ? Math.max(120, (bin.volume / maxVol) * maxBarWidth) : 120;
       const yMin = yTop != null && yBot != null ? Math.min(yTop, yBot) - 3 : yMid - 8;
       const yMax = yTop != null && yBot != null ? Math.max(yTop, yBot) + 3 : yMid + 8;
-      hitboxes.push({ yMin, yMax, xMax: Math.max(barW + 40, width * 0.52), bin });
+      hitboxes.push({ yMin, yMax, xMax: zoneEndX + 20, bin });
 
       if (placedPillYs.some((py) => Math.abs(py - yMid) < 18)) continue;
       placedPillYs.push(yMid);
@@ -1004,7 +1012,7 @@ function OrderFlowSignalChart({
       const reactW = reactPart ? ctx.measureText(reactPart).width : 0;
       const totalTextW = volW + pctW + reactW + 14;
 
-      const labelX = Math.max(8, Math.min(width - totalTextW - 76, barW - totalTextW + 10));
+      const labelX = Math.max(8, Math.min(width - totalTextW - 76, zoneEndX - totalTextW - 4));
       const labelY = Math.max(8, Math.min(height - 8, yMid));
 
       // Subtle dark backing only behind text so it stays legible over candles
@@ -1037,7 +1045,6 @@ function OrderFlowSignalChart({
     hvnHitboxesRef.current = hitboxes;
 
     // 3. Absorption circles
-    const ts = chart.timeScale();
     for (const sig of absorptionsRef.current) {
       const x = ts.timeToCoordinate(sig.time);
       const y = series.priceToCoordinate(sig.price);
@@ -1086,7 +1093,6 @@ function OrderFlowSignalChart({
     }
 
     // 4. X Imbalance inside current candle when price is within 0.1% of any HVN bar
-    const curList = candlesRef.current;
     if (curList.length && hvnsWithReaction.length) {
       const curBar = curList[curList.length - 1];
       const nearHvn = hvnsWithReaction.some(
