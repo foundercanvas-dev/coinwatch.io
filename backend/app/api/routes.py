@@ -348,14 +348,24 @@ _OF_FALLBACK_SYMBOLS = [
 ]
 _OF_EXCLUDED_SYMBOLS = {
     "USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "USDPUSDT", "BUSDUSDT", "DAIUSDT", "USD1USDT", "EURUSDT",
-    "XAUUSDT", "XAGUSDT", "SPYUSDT", "QQQUSDT", "TQQQUSDT", "SOXLUSDT", "SOXSUSDT",
+    "XAUUSDT", "XAGUSDT", "XAUTUSDT", "PAXGUSDT", "SPYUSDT", "QQQUSDT", "TQQQUSDT", "SOXLUSDT", "SOXSUSDT",
     "NVDAUSDT", "AMDUSDT", "INTCUSDT", "GOOGLUSDT", "MSTRUSDT", "SPCXUSDT", "SNDKUSDT",
     "SKHYNIXUSDT", "SKHYUSDT", "MUUSDT", "NBISUSDT", "EWYUSDT", "KORUUSDT", "SAMSUNGUSDT",
-    "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT",
+    "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT", "ZHONGJIUSDT",
 }
 _OF_SNAPSHOT_TTL_SEC = 45.0
+_OF_KLINE_TTL_BY_TF = {
+    "1m": 30.0,
+    "3m": 45.0,
+    "5m": 45.0,
+    "15m": 60.0,
+    "1h": 180.0,
+    "4h": 180.0,
+    "1d": 300.0,
+}
 _OF_SYMBOLS_TTL_SEC = 300.0
 _of_symbols_cache: Dict[str, Any] = {"symbols": list(_OF_FALLBACK_SYMBOLS), "ts": 0.0}
+_of_kline_cache: Dict[str, tuple] = {}
 _of_snapshot_cache: Dict[str, Dict[str, Any]] = {}
 _of_snapshot_locks: Dict[str, asyncio.Lock] = {}
 
@@ -395,6 +405,12 @@ async def _fetch_liquid_of_symbols(client: httpx.AsyncClient) -> List[str]:
 
 
 async def _fetch_of_klines(client: httpx.AsyncClient, sem: asyncio.Semaphore, sym: str, tf: str):
+    key = f"{sym}:{tf}"
+    ttl = _OF_KLINE_TTL_BY_TF.get(tf, 45.0)
+    now = time.time()
+    cached = _of_kline_cache.get(key)
+    if cached and (now - cached[0]) < ttl:
+        return key, cached[1]
     async with sem:
         for url in (
             f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={tf}&limit=100",
@@ -405,10 +421,12 @@ async def _fetch_of_klines(client: httpx.AsyncClient, sem: asyncio.Semaphore, sy
                 if resp.status_code == 200:
                     data = resp.json()
                     if isinstance(data, list) and data:
-                        return f"{sym}:{tf}", [r[:10] for r in data]
+                        trimmed = [r[:10] for r in data]
+                        _of_kline_cache[key] = (time.time(), trimmed)
+                        return key, trimmed
             except Exception:
                 continue
-        return f"{sym}:{tf}", None
+        return key, cached[1] if cached else None
 
 
 async def _fetch_of_depth(client: httpx.AsyncClient, sem: asyncio.Semaphore, sym: str):

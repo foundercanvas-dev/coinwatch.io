@@ -41,10 +41,10 @@ const FALLBACK_SYMBOLS = [
 
 const EXCLUDED_OF_SYMBOLS = new Set([
   "USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "USDPUSDT", "BUSDUSDT", "DAIUSDT", "USD1USDT", "EURUSDT",
-  "XAUUSDT", "XAGUSDT", "SPYUSDT", "QQQUSDT", "TQQQUSDT", "SOXLUSDT", "SOXSUSDT",
+  "XAUUSDT", "XAGUSDT", "XAUTUSDT", "PAXGUSDT", "SPYUSDT", "QQQUSDT", "TQQQUSDT", "SOXLUSDT", "SOXSUSDT",
   "NVDAUSDT", "AMDUSDT", "INTCUSDT", "GOOGLUSDT", "MSTRUSDT", "SPCXUSDT", "SNDKUSDT",
   "SKHYNIXUSDT", "SKHYUSDT", "MUUSDT", "NBISUSDT", "EWYUSDT", "KORUUSDT", "SAMSUNGUSDT",
-  "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT",
+  "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT", "ZHONGJIUSDT",
 ]);
 
 let cachedFuturesSymbols = null;
@@ -293,6 +293,11 @@ async function runSharedOrderFlowScan(timeframe = "all", { force = false } = {})
     if (snapshot) {
       const processed = processOrderFlowSnapshot(snapshot, timeframe);
       writeOrderFlowCache(timeframe, processed);
+      if (timeframe === "all") {
+        for (const subTf of ["1m", "5m", "15m"]) {
+          writeOrderFlowCache(subTf, processOrderFlowSnapshot(snapshot, subTf));
+        }
+      }
       return processed;
     }
 
@@ -425,9 +430,12 @@ export default function OrderFlowView({
     return () => clearInterval(t);
   }, []);
 
+  const scanReqIdRef = useRef(0);
+
   // Shared cached scanner across liquid Binance Futures pairs & timeframes
   const scanMarkets = useCallback(
     async (force = false) => {
+      const reqId = ++scanReqIdRef.current;
       const cached = readOrderFlowCache(timeframe);
       if (cached) {
         setWatchedCount(cached.watchedCount);
@@ -436,10 +444,13 @@ export default function OrderFlowView({
         setFlowStats(cached.flowStats);
         setScanning(false);
       } else {
+        setSignals([]);
+        setHistorySignals([]);
         setScanning(true);
       }
       try {
         const result = await runSharedOrderFlowScan(timeframe, { force });
+        if (reqId !== scanReqIdRef.current) return;
         setWatchedCount(result.watchedCount);
         setSignals(result.signals);
         setHistorySignals(result.historySignals);
@@ -452,7 +463,9 @@ export default function OrderFlowView({
       } catch {
         /* keep previous/cached signals */
       } finally {
-        setScanning(false);
+        if (reqId === scanReqIdRef.current) {
+          setScanning(false);
+        }
       }
     },
     [timeframe],
@@ -478,19 +491,23 @@ export default function OrderFlowView({
     );
   }
 
-  const newSignals = signals.filter(
+  const tfSignals =
+    timeframe === "all" ? signals : signals.filter((s) => s.timeframe === timeframe);
+  const tfHistory =
+    timeframe === "all" ? historySignals : historySignals.filter((s) => s.timeframe === timeframe);
+  const newSignals = tfSignals.filter(
     (s) => nowSec - (s.time - TZ_SHIFT) <= newWindowFor(s.timeframe),
   );
-  const activeSignals = signals.filter(
+  const activeSignals = tfSignals.filter(
     (s) => nowSec - (s.time - TZ_SHIFT) > newWindowFor(s.timeframe),
   );
   const sourceList =
-    tab === "new" ? newSignals : tab === "active" ? activeSignals : historySignals;
+    tab === "new" ? newSignals : tab === "active" ? activeSignals : tfHistory;
   const visibleSignals = sourceList.filter(
     (s) => sideFilter === "all" || s.side === sideFilter.toUpperCase(),
   );
-  const longCount = signals.filter((s) => s.side === "LONG").length;
-  const shortCount = signals.filter((s) => s.side === "SHORT").length;
+  const longCount = tfSignals.filter((s) => s.side === "LONG").length;
+  const shortCount = tfSignals.filter((s) => s.side === "SHORT").length;
   const totalFlow = flowStats.inflowUsd + flowStats.outflowUsd;
   const inflowPct = totalFlow > 0 ? (flowStats.inflowUsd / totalFlow) * 100 : 50;
   const outflowPct = 100 - inflowPct;
