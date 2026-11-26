@@ -198,6 +198,88 @@ export function computeHvnProfile(candles, rows = 50) {
 }
 
 /**
+ * Computes historical touch & reaction rate for each HVN bin over the last 100 candles.
+ * Touch = price within 0.1% of bin price.
+ * Reaction = within next 5 candles, price moves >= 0.2% in opposite direction of approach.
+ */
+export function computeHvnReactionHistory(candles, hvnProfile) {
+  if (!Array.isArray(candles) || candles.length < 10 || !hvnProfile?.hvns?.length) {
+    return [];
+  }
+  const slice = candles.slice(-100);
+  return hvnProfile.hvns.map((bin) => {
+    const barPrice = bin.price;
+    if (!(barPrice > 0)) {
+      return {
+        ...bin,
+        touches: 0,
+        reactions: 0,
+        reactionRate: 0,
+        confidenceLabel: "FRESH ZONE - NO TEST YET",
+        confidenceColor: "#9ca3af",
+      };
+    }
+
+    let touches = 0;
+    let reactions = 0;
+    let cooldownUntil = -1;
+
+    for (let i = 0; i < slice.length - 1; i++) {
+      if (i <= cooldownUntil) continue;
+      const c = slice[i];
+      const touched = c.low <= barPrice * 1.001 && c.high >= barPrice * 0.999;
+      if (!touched) continue;
+
+      touches++;
+      const approachedFromBelow = c.open < barPrice;
+      let reacted = false;
+      const end = Math.min(slice.length - 1, i + 5);
+      for (let j = i + 1; j <= end; j++) {
+        const fut = slice[j];
+        if (approachedFromBelow) {
+          if (((barPrice - fut.low) / barPrice) * 100 >= 0.2) {
+            reacted = true;
+            break;
+          }
+        } else {
+          if (((fut.high - barPrice) / barPrice) * 100 >= 0.2) {
+            reacted = true;
+            break;
+          }
+        }
+      }
+      if (reacted) reactions++;
+      cooldownUntil = i + 5;
+    }
+
+    const reactionRate = touches > 0 ? Math.round((reactions / touches) * 100) : 0;
+    let confidenceLabel = "FRESH ZONE - NO TEST YET";
+    let confidenceColor = "#9ca3af";
+    if (touches > 0) {
+      if (reactionRate >= 70) {
+        confidenceLabel = "HIGH CONFIDENCE";
+        confidenceColor = "#22c55e";
+      } else if (reactionRate >= 50) {
+        confidenceLabel = "MEDIUM";
+        confidenceColor = "#FFD700";
+      } else {
+        confidenceLabel = "WEAK";
+        confidenceColor = "#9ca3af";
+      }
+    }
+
+    return {
+      ...bin,
+      touches,
+      reactions,
+      reactionRate,
+      confidenceLabel,
+      confidenceColor,
+    };
+  });
+}
+
+/**
  * Computes Footprint price-level rows and Imbalance Levels (Ratio >= 3.0x) inside a candle's trades.
  */
 export function buildFootprintLevels(trades, tickSize, minImbalanceVol = 5) {

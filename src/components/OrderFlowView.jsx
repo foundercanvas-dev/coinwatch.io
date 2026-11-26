@@ -20,6 +20,7 @@ import {
   computeAtr14,
   computeDeltaAndCVD,
   computeHvnProfile,
+  computeHvnReactionHistory,
   detectAbsorptionSignals,
 } from "../lib/orderflowMath";
 import { calculateSmartEntry, calculateTradePlan } from "../lib/tradeMath";
@@ -882,6 +883,7 @@ function OrderFlowSignalChart({
 
   const chartWrapRef = useRef(null);
   const chartElRef = useRef(null);
+  const hvnCanvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
@@ -889,12 +891,29 @@ function OrderFlowSignalChart({
   const customLinesRef = useRef([]);
   const candlesRef = useRef([]);
   const absorptionsRef = useRef([signal]);
+  const hvnDataRef = useRef({ bins: [], hvnsWithReaction: [], poc: null, maxVol: 0 });
+  const hvnHitboxesRef = useRef([]);
   const tfSetupRef = useRef(signal);
   const wallTrackerRef = useRef(new Map());
   const seededRef = useRef(false);
+  const [hoveredHvn, setHoveredHvn] = useState(null);
+
+  const updateHvnState = useCallback((candleList) => {
+    const hvn = computeHvnProfile(candleList, 50);
+    const hvnsWithReaction = hvn ? computeHvnReactionHistory(candleList, hvn) : [];
+    const maxVol = hvn?.bins?.length ? Math.max(...hvn.bins.map((b) => b.volume)) : 0;
+    hvnDataRef.current = {
+      bins: hvn?.bins || [],
+      hvnsWithReaction,
+      poc: hvn?.poc || null,
+      maxVol,
+    };
+    return hvn;
+  }, []);
 
   const drawAbsorptionCircles = useCallback(() => {
     const canvas = overlayCanvasRef.current;
+    const hvnCanvas = hvnCanvasRef.current;
     const chart = chartRef.current;
     const series = seriesRef.current;
     if (!canvas || !chart || !series) return;
@@ -911,6 +930,124 @@ function OrderFlowSignalChart({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
+    // 1. Draw Horizontal Volume Profile / HVN bars behind candles on hvnCanvas
+    const { bins, hvnsWithReaction, maxVol } = hvnDataRef.current;
+    const hvnByIdx = new Map(hvnsWithReaction.map((h) => [h.index, h]));
+    if (hvnCanvas) {
+      if (hvnCanvas.width !== Math.floor(width * dpr) || hvnCanvas.height !== Math.floor(height * dpr)) {
+        hvnCanvas.width = Math.floor(width * dpr);
+        hvnCanvas.height = Math.floor(height * dpr);
+      }
+      const hctx = hvnCanvas.getContext("2d");
+      hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      hctx.clearRect(0, 0, width, height);
+
+      const maxBarWidth = width * 0.34;
+      for (const bin of bins) {
+        const yTop = series.priceToCoordinate(bin.high);
+        const yBot = series.priceToCoordinate(bin.low);
+        if (yTop == null || yBot == null || !Number.isFinite(yTop) || !Number.isFinite(yBot)) continue;
+        const rawH = Math.abs(yBot - yTop);
+        const top = Math.min(yTop, yBot);
+        const barW = maxVol > 0 ? Math.max(8, (bin.volume / maxVol) * maxBarWidth) : 8;
+        const hvnEntry = hvnByIdx.get(bin.index);
+
+        if (hvnEntry) {
+          const barH = Math.max(hvnEntry.isPoc ? 10 : 7, rawH * 0.86);
+          const yDraw = top + (rawH - barH) / 2;
+          hctx.fillStyle = hvnEntry.isPoc
+            ? "rgba(249, 115, 22, 0.40)"
+            : "rgba(217, 119, 6, 0.24)";
+          hctx.fillRect(0, yDraw, barW, barH);
+          hctx.strokeStyle = hvnEntry.isPoc
+            ? "rgba(251, 146, 60, 0.85)"
+            : "rgba(245, 158, 11, 0.45)";
+          hctx.lineWidth = hvnEntry.isPoc ? 1.5 : 1;
+          hctx.strokeRect(0.5, yDraw + 0.5, Math.max(1, barW - 1), Math.max(1, barH - 1));
+        } else {
+          const barH = Math.max(2, Math.min(4, rawH * 0.45));
+          const yDraw = top + (rawH - barH) / 2;
+          hctx.fillStyle = "rgba(156, 163, 175, 0.11)";
+          hctx.fillRect(0, yDraw, barW, barH);
+        }
+      }
+    }
+
+    // 2. Draw always-visible Yellow X Data + Reaction History pills & hover hitboxes
+    const hitboxes = [];
+    const placedPillYs = [];
+    const maxBarWidth = width * 0.34;
+    const sortedHvns = [...hvnsWithReaction].sort((a, b) => {
+      if (a.isPoc !== b.isPoc) return a.isPoc ? -1 : 1;
+      return b.volume - a.volume;
+    });
+
+    ctx.font = '700 11px "Funnel Display", sans-serif';
+    for (const bin of sortedHvns) {
+      const yTop = series.priceToCoordinate(bin.high);
+      const yBot = series.priceToCoordinate(bin.low);
+      const yMid = series.priceToCoordinate(bin.price);
+      if (yMid == null || !Number.isFinite(yMid)) continue;
+
+      const barW = maxVol > 0 ? Math.max(12, (bin.volume / maxVol) * maxBarWidth) : 12;
+      const yMin = yTop != null && yBot != null ? Math.min(yTop, yBot) - 3 : yMid - 8;
+      const yMax = yTop != null && yBot != null ? Math.max(yTop, yBot) + 3 : yMid + 8;
+      hitboxes.push({ yMin, yMax, xMax: width - 72, bin });
+
+      if (placedPillYs.some((py) => Math.abs(py - yMid) < 20)) continue;
+      placedPillYs.push(yMid);
+
+      const xDataText = `${formatCompactNum(bin.volume)} | ${bin.percent}%`;
+      const reactText =
+        bin.touches > 0 ? ` | ${bin.reactions}/${bin.touches} (${bin.reactionRate}%)` : "";
+      const mainText = `${xDataText}${reactText}`;
+      const confText = bin.confidenceLabel;
+
+      ctx.font = '700 11px "Funnel Display", sans-serif';
+      const mainW = ctx.measureText(mainText).width;
+      ctx.font = '600 9.5px "Funnel Display", sans-serif';
+      const confW = ctx.measureText(confText).width;
+
+      const dotPad = 14;
+      const pillW = mainW + dotPad + confW + 18;
+      const pillH = 18;
+      const pillX = Math.max(6, Math.min(width - pillW - 76, barW + 6));
+      const pillY = Math.max(4, Math.min(height - pillH - 4, yMid - pillH / 2));
+
+      // Black pill background
+      ctx.save();
+      ctx.fillStyle = "rgba(8, 10, 13, 0.90)";
+      ctx.strokeStyle = bin.isPoc ? "rgba(251, 146, 60, 0.65)" : "rgba(255, 215, 0, 0.32)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(pillX, pillY, pillW, pillH, 5);
+      ctx.fill();
+      ctx.stroke();
+
+      // Yellow X Data + Reaction History text
+      ctx.fillStyle = "#FFD700";
+      ctx.font = '700 11px "Funnel Display", sans-serif';
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(mainText, pillX + 7, pillY + pillH / 2);
+
+      // Confidence Dot
+      const dotX = pillX + 7 + mainW + 8;
+      const dotY = pillY + pillH / 2;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = bin.confidenceColor;
+      ctx.fill();
+
+      // Confidence Text
+      ctx.fillStyle = bin.confidenceColor;
+      ctx.font = '600 9.5px "Funnel Display", sans-serif';
+      ctx.fillText(confText, dotX + 6, dotY);
+      ctx.restore();
+    }
+    hvnHitboxesRef.current = hitboxes;
+
+    // 3. Absorption circles
     const ts = chart.timeScale();
     for (const sig of absorptionsRef.current) {
       const x = ts.timeToCoordinate(sig.time);
@@ -922,7 +1059,6 @@ function OrderFlowSignalChart({
       const isCurrent = Boolean(curTfSetup && sig.time === curTfSetup.time && sig.side === curTfSetup.side);
       const radius = isCurrent ? 25 : 16;
 
-      // Active setup circle is bright & crisp; past setups are smaller and dimmed
       if (isCurrent) {
         ctx.beginPath();
         ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
@@ -951,7 +1087,6 @@ function OrderFlowSignalChart({
           : "rgba(242, 112, 124, 0.28)";
       ctx.stroke();
 
-      // Volume label inside circle
       ctx.fillStyle = isCurrent ? "#f1f3f1" : "rgba(241, 243, 241, 0.55)";
       ctx.font = isCurrent
         ? '600 11px "Funnel Display", sans-serif'
@@ -959,6 +1094,54 @@ function OrderFlowSignalChart({
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(formatCompactNum(sig.absorbedVol), x, y);
+    }
+
+    // 4. X Imbalance inside current candle when price is within 0.1% of any HVN bar
+    const curList = candlesRef.current;
+    if (curList.length && hvnsWithReaction.length) {
+      const curBar = curList[curList.length - 1];
+      const nearHvn = hvnsWithReaction.some(
+        (h) => h.price > 0 && Math.abs(curBar.close - h.price) / h.price <= 0.001,
+      );
+      if (nearHvn) {
+        const xCur = ts.timeToCoordinate(curBar.time);
+        const yCur = series.priceToCoordinate(curBar.close);
+        if (xCur != null && yCur != null && Number.isFinite(xCur) && Number.isFinite(yCur)) {
+          const buyV = Number(curBar.buyVol || 0);
+          const sellV = Number(curBar.sellVol || 0);
+          const maxV = Math.max(buyV, sellV);
+          const minV = Math.min(buyV, sellV);
+          const ratio = minV > 0 ? Math.round(maxV / minV) : maxV > 0 ? 99 : 1;
+          const delta = Math.round(buyV - sellV);
+          const imbText = `${ratio}x | ${delta >= 0 ? "+" : ""}${formatCompactNum(delta)}`;
+          const isExtreme = ratio >= 5;
+
+          ctx.save();
+          ctx.font = '700 11px "Funnel Display", sans-serif';
+          const tw = ctx.measureText(imbText).width + 14;
+          const th = 19;
+          const bx = Math.max(6, Math.min(width - tw - 76, xCur - tw / 2));
+          const by = Math.max(6, yCur - 26);
+          if (isExtreme) {
+            ctx.shadowColor = "rgba(255, 215, 0, 0.75)";
+            ctx.shadowBlur = 12;
+          }
+          ctx.fillStyle = isExtreme ? "rgba(255, 215, 0, 0.22)" : "rgba(11, 12, 15, 0.90)";
+          ctx.strokeStyle = isExtreme ? "#FFD700" : "rgba(255, 215, 0, 0.45)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(bx, by, tw, th, 5);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "#FFD700";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(imbText, bx + tw / 2, by + th / 2);
+          ctx.restore();
+        }
+      }
     }
   }, [signal.time, signal.side]);
 
@@ -1053,7 +1236,7 @@ function OrderFlowSignalChart({
             sellUsd: (lastBar.sellVol || 0) * lastBar.close,
           });
         }
-        const hvn = computeHvnProfile(parsed, 50);
+        const hvn = updateHvnState(parsed);
         const allAbs = detectAbsorptionSignals(parsed, sym, hvn, { includeStopped: true, includeLive: true });
         const list = [...allAbs];
         if (chartIv === signal.timeframe && !list.some((s) => s.time === signal.time && s.side === signal.side)) {
@@ -1227,7 +1410,7 @@ function OrderFlowSignalChart({
               last.sellVol = Math.max(last.sellVol, bar.sellVol);
               if (k.x) {
                 last.close = bar.close;
-                const hvn = computeHvnProfile(list, 50);
+                const hvn = updateHvnState(list);
                 const allAbs = detectAbsorptionSignals(list, sym, hvn, { includeStopped: true, includeLive: true });
                 const nextAbs = [...allAbs];
                 if (chartIv === signal.timeframe && !nextAbs.some((s) => s.time === signal.time && s.side === signal.side)) {
@@ -1281,7 +1464,7 @@ function OrderFlowSignalChart({
             }
           }
         }
-        const hvn = computeHvnProfile(candlesRef.current, 50);
+        const hvn = updateHvnState(candlesRef.current);
         const allAbs = detectAbsorptionSignals(candlesRef.current, sym, hvn, { includeStopped: true, includeLive: true });
         const list = [...allAbs];
         if (chartIv === signal.timeframe && !list.some((s) => s.time === signal.time && s.side === signal.side)) {
@@ -1653,6 +1836,25 @@ function OrderFlowSignalChart({
           <div
             ref={chartWrapRef}
             onClick={() => chartMenu && setChartMenu(null)}
+            onMouseMove={(e) => {
+              const rect = chartWrapRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              const localX = e.clientX - rect.left;
+              const localY = e.clientY - rect.top;
+              const hit = hvnHitboxesRef.current.find(
+                (hb) => localY >= hb.yMin && localY <= hb.yMax && localX <= hb.xMax,
+              );
+              if (hit) {
+                setHoveredHvn({
+                  x: Math.min(rect.width - 210, Math.max(12, localX + 14)),
+                  y: Math.min(rect.height - 170, Math.max(12, localY - 12)),
+                  bin: hit.bin,
+                });
+              } else if (hoveredHvn) {
+                setHoveredHvn(null);
+              }
+            }}
+            onMouseLeave={() => hoveredHvn && setHoveredHvn(null)}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -1670,11 +1872,61 @@ function OrderFlowSignalChart({
             }}
             className="relative h-[600px] rounded-xl border border-white/[0.06] bg-[#0b0c0f] overflow-hidden select-none"
           >
-            <div ref={chartElRef} className="absolute inset-0" />
+            <canvas
+              ref={hvnCanvasRef}
+              className="pointer-events-none absolute inset-0 z-0 w-full h-full"
+            />
+            <div ref={chartElRef} className="absolute inset-0 z-[1]" />
             <canvas
               ref={overlayCanvasRef}
               className="pointer-events-none absolute inset-0 z-10 w-full h-full"
             />
+            {hoveredHvn && (
+              <div
+                style={{ left: hoveredHvn.x, top: hoveredHvn.y }}
+                className="pointer-events-none absolute z-20 w-48 rounded-lg border border-white/[0.14] bg-[#0b0c0f]/95 backdrop-blur-md px-3 py-2 shadow-2xl text-[11px] space-y-1 cw-num"
+              >
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Price</span>
+                  <span className="font-semibold text-snow">{fmtPrice(hoveredHvn.bin.price)}</span>
+                </div>
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Volume</span>
+                  <span className="font-semibold text-[#FFD700]">{formatCompactNum(hoveredHvn.bin.volume)}</span>
+                </div>
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Share</span>
+                  <span className="font-semibold text-[#FFD700]">{hoveredHvn.bin.percent}%</span>
+                </div>
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Touches</span>
+                  <span className="font-semibold text-snow">{hoveredHvn.bin.touches}</span>
+                </div>
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Reactions</span>
+                  <span className="font-semibold text-snow">{hoveredHvn.bin.reactions}</span>
+                </div>
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Reaction Rate</span>
+                  <span className="font-semibold text-snow">{hoveredHvn.bin.reactionRate}%</span>
+                </div>
+                <div className="flex items-center justify-between text-fog-2">
+                  <span>Type</span>
+                  <span className="font-semibold text-amber-400">
+                    {hoveredHvn.bin.isPoc ? "POC · HVN Strong" : "HVN Strong"}
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-white/[0.08] flex items-center gap-1.5">
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: hoveredHvn.bin.confidenceColor }}
+                  />
+                  <span className="font-semibold text-[10px]" style={{ color: hoveredHvn.bin.confidenceColor }}>
+                    {hoveredHvn.bin.confidenceLabel}
+                  </span>
+                </div>
+              </div>
+            )}
             {!candles.length && (
               <div className="absolute inset-0 flex items-center justify-center text-[12px] text-fog-2">
                 Loading chart…
