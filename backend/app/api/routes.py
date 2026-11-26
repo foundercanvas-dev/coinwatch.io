@@ -353,13 +353,13 @@ _OF_EXCLUDED_SYMBOLS = {
     "SKHYNIXUSDT", "SKHYUSDT", "MUUSDT", "NBISUSDT", "EWYUSDT", "KORUUSDT", "SAMSUNGUSDT",
     "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT", "ZHONGJIUSDT",
 }
-_OF_SNAPSHOT_TTL_SEC = 45.0
+_OF_SNAPSHOT_TTL_SEC = 12.0
 _OF_KLINE_TTL_BY_TF = {
-    "1m": 30.0,
-    "3m": 45.0,
-    "5m": 45.0,
-    "15m": 60.0,
-    "1h": 180.0,
+    "1m": 10.0,
+    "3m": 15.0,
+    "5m": 15.0,
+    "15m": 30.0,
+    "1h": 120.0,
     "4h": 180.0,
     "1d": 300.0,
 }
@@ -525,7 +525,7 @@ async def get_orderflow_snapshot(timeframe: str = Query("all")):
     payload = await build_orderflow_snapshot(timeframe)
     return JSONResponse(
         content=payload,
-        headers={"Cache-Control": "public, max-age=25, stale-while-revalidate=35"},
+        headers={"Cache-Control": "public, max-age=10, stale-while-revalidate=15"},
     )
 
 

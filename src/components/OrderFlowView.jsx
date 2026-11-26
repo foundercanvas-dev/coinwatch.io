@@ -10,6 +10,8 @@ import {
   ShieldWarning,
   Bell,
   BellSlash,
+  MagnifyingGlass,
+  X,
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
 import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
@@ -128,7 +130,7 @@ const NEW_WINDOW_SEC = {
 const newWindowFor = (tf) => NEW_WINDOW_SEC[tf] || 600;
 
 const OF_CACHE_PREFIX = "cw.of.cache.v1.";
-const OF_FRESH_MS = 20_000;
+const OF_FRESH_MS = 10_000;
 const OF_STALE_MAX_MS = 300_000;
 const memoryOrderFlowCache = new Map();
 const inflightOrderFlowScans = new Map();
@@ -442,6 +444,7 @@ export default function OrderFlowView({
   const [hasConnectedOnce, setHasConnectedOnce] = useState(() => Boolean(initialCache));
   const [selectedSignal, setSelectedSignal] = useState(initialSignal || null);
   const [sideFilter, setSideFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
@@ -501,7 +504,7 @@ export default function OrderFlowView({
 
   useEffect(() => {
     scanMarkets(false);
-    const timer = setInterval(() => scanMarkets(true), 40000);
+    const timer = setInterval(() => scanMarkets(true), 12000);
     return () => clearInterval(timer);
   }, [scanMarkets]);
 
@@ -531,8 +534,11 @@ export default function OrderFlowView({
   );
   const sourceList =
     tab === "new" ? newSignals : tab === "active" ? activeSignals : tfHistory;
+  const normSearch = searchQuery.trim().toLowerCase();
   const visibleSignals = sourceList.filter(
-    (s) => sideFilter === "all" || s.side === sideFilter.toUpperCase(),
+    (s) =>
+      (sideFilter === "all" || s.side === sideFilter.toUpperCase()) &&
+      (!normSearch || s.symbol.toLowerCase().includes(normSearch)),
   );
   const longCount = tfSignals.filter((s) => s.side === "LONG").length;
   const shortCount = tfSignals.filter((s) => s.side === "SHORT").length;
@@ -642,6 +648,30 @@ export default function OrderFlowView({
             ]}
           />
           <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex items-center">
+              <MagnifyingGlass
+                weight="bold"
+                className="pointer-events-none absolute left-2.5 w-3.5 h-3.5 text-fog-2"
+              />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search coin…"
+                aria-label="Search coin"
+                className="h-8 w-36 sm:w-44 rounded-lg border border-white/[0.08] bg-white/[0.03] pl-8 pr-7 text-[12px] text-snow placeholder:text-fog-2 focus:border-mint/40 focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  aria-label="Clear search"
+                  className="absolute right-2 text-fog-2 hover:text-snow"
+                >
+                  <X weight="bold" className="w-3 h-3" />
+                </button>
+              )}
+            </div>
             <Segmented
               size="sm"
               value={timeframe}

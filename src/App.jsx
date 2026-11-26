@@ -463,7 +463,7 @@ export default function App() {
       }
     };
     poll();
-    const timer = setInterval(poll, 22000);
+    const timer = setInterval(poll, 10000);
     return () => {
       alive = false;
       clearInterval(timer);

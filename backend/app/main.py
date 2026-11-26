@@ -124,16 +124,20 @@ async def background_scanner_loop():
         await asyncio.sleep(0.5)  # 500ms broadcast cycle (ultra smooth, zero lag)
 
 async def orderflow_prewarm_loop():
-    """Keep all Order Flow timeframe snapshots warm in memory so switching timeframes is instant."""
+    """Keep all Order Flow timeframe snapshots warm in memory so switching timeframes & alerts are instant."""
     await asyncio.sleep(2.0)
+    cycle = 0
     while True:
-        for tf in ("all", "3m", "1h", "4h", "1d", "1m", "5m", "15m"):
-            try:
-                await build_orderflow_snapshot(tf)
-            except Exception as e:
-                logger.debug(f"OrderFlow prewarm error ({tf}): {e}")
-            await asyncio.sleep(1.5)
-        await asyncio.sleep(30.0)
+        try:
+            await build_orderflow_snapshot("all")
+            if cycle % 2 == 0:
+                for tf in ("3m", "1h", "4h", "1d"):
+                    await build_orderflow_snapshot(tf)
+                    await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.debug(f"OrderFlow prewarm error: {e}")
+        cycle += 1
+        await asyncio.sleep(11.0)
 
 
 @asynccontextmanager
