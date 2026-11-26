@@ -250,31 +250,20 @@ function processOrderFlowSnapshot(snapshot, timeframe) {
 }
 
 async function fetchBackendSnapshot(timeframe) {
-  const endpoints = [`/api/orderflow/snapshot?timeframe=${encodeURIComponent(timeframe)}`];
-  if (
-    typeof window !== "undefined" &&
-    window.location.hostname !== "coinwatch-io.onrender.com" &&
-    window.location.hostname !== "localhost" &&
-    window.location.hostname !== "127.0.0.1"
-  ) {
-    endpoints.push(
-      `https://coinwatch-io.onrender.com/api/orderflow/snapshot?timeframe=${encodeURIComponent(timeframe)}`,
-    );
-  }
-  for (const url of endpoints) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 7000);
-      const res = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) continue;
+  const url = `/api/orderflow/snapshot?timeframe=${encodeURIComponent(timeframe)}`;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) {
       const json = await res.json();
       if (json && json.klines && Object.keys(json.klines).length > 0) {
         return json;
       }
-    } catch {
-      /* try next endpoint */
     }
+  } catch {
+    /* fallback below */
   }
   return null;
 }

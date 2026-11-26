@@ -4,6 +4,7 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
 
 from app.core.config import settings
@@ -172,7 +173,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration
+# CORS & GZip compression (shrinks Order Flow snapshot ~10x)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
