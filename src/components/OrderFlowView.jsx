@@ -634,7 +634,7 @@ export default function OrderFlowView({
             options={[
               { value: "new", label: "New", badge: newSignals.length },
               { value: "active", label: "Active", badge: activeSignals.length },
-              { value: "history", label: "History", badge: historySignals.length },
+              { value: "history", label: "History", badge: tfHistory.length },
             ]}
           />
           <div className="flex flex-wrap items-center gap-2">
@@ -787,16 +787,54 @@ export default function OrderFlowView({
           })}
 
           {!visibleSignals.length && (
-            <div className="col-span-full py-14 text-center text-[12px] text-fog-2">
-              {tab === "history"
-                ? "No closed or expired setups in history yet."
-                : tab === "new"
-                  ? scanning
-                    ? "Scanning for fresh setups…"
-                    : "No new setups in their live window right now — check Active."
-                  : scanning
-                    ? "Looking for active setups…"
-                    : "No active setups right now."}
+            <div className="col-span-full py-12 flex flex-col items-center justify-center gap-3.5 text-center">
+              {tab === "new" ? (
+                <>
+                  <div className="relative w-20 h-20 rounded-full border border-mint/25 bg-mint/[0.03] flex items-center justify-center overflow-hidden shadow-[0_0_24px_rgba(45,212,191,0.08)]">
+                    {/* Concentric radar rings */}
+                    <div className="absolute inset-2.5 rounded-full border border-mint/15" />
+                    <div className="absolute inset-5 rounded-full border border-mint/15" />
+                    {/* Crosshair lines */}
+                    <div className="absolute inset-x-0 top-1/2 h-px bg-mint/10" />
+                    <div className="absolute inset-y-0 left-1/2 w-px bg-mint/10" />
+                    {/* Rotating radar sweep beam */}
+                    <div
+                      className="absolute inset-0 rounded-full animate-spin"
+                      style={{
+                        animationDuration: "2.4s",
+                        background:
+                          "conic-gradient(from 0deg, rgba(45,212,191,0.34) 0deg, rgba(45,212,191,0.08) 45deg, transparent 85deg, transparent 360deg)",
+                      }}
+                    />
+                    {/* Blip dots */}
+                    <span className="absolute top-3.5 right-4 w-1.5 h-1.5 rounded-full bg-mint/80 animate-ping" />
+                    <span
+                      className="absolute bottom-4 left-4 w-1 h-1 rounded-full bg-mint/60 animate-pulse"
+                      style={{ animationDelay: "0.7s" }}
+                    />
+                    {/* Center pulse */}
+                    <span className="relative w-2.5 h-2.5 rounded-full bg-mint shadow-[0_0_10px_rgba(45,212,191,0.9)]" />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[13px] font-medium text-snow">
+                      Scanning live market for new setups…
+                    </div>
+                    <div className="text-[11px] text-fog-2">
+                      {scanning
+                        ? `Watching ${watchedCount} pairs in real time`
+                        : "Watching live pairs — check Active for ongoing setups"}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-[12px] text-fog-2 py-2">
+                  {tab === "history"
+                    ? "No closed or expired setups in history yet."
+                    : scanning
+                      ? "Looking for active setups…"
+                      : "No active setups right now."}
+                </div>
+              )}
             </div>
           )}
         </div>
