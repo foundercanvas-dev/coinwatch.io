@@ -353,12 +353,12 @@ _OF_EXCLUDED_SYMBOLS = {
     "SKHYNIXUSDT", "SKHYUSDT", "MUUSDT", "NBISUSDT", "EWYUSDT", "KORUUSDT", "SAMSUNGUSDT",
     "DRAMUSDT", "SNXXUSDT", "CLUSDT", "BZUSDT", "ZHONGJIUSDT",
 }
-_OF_SNAPSHOT_TTL_SEC = 12.0
+_OF_SNAPSHOT_TTL_SEC = 25.0
 _OF_KLINE_TTL_BY_TF = {
-    "1m": 10.0,
-    "3m": 15.0,
-    "5m": 15.0,
-    "15m": 30.0,
+    "1m": 20.0,
+    "3m": 30.0,
+    "5m": 30.0,
+    "15m": 45.0,
     "1h": 120.0,
     "4h": 180.0,
     "1d": 300.0,
@@ -393,7 +393,7 @@ async def _fetch_liquid_of_symbols(client: httpx.AsyncClient) -> List[str]:
                         ),
                         key=lambda t: float(t.get("quoteVolume") or 0),
                         reverse=True,
-                    )[:120]
+                    )[:80]
                 ]
                 if len(liquid) >= 12:
                     _of_symbols_cache["symbols"] = liquid

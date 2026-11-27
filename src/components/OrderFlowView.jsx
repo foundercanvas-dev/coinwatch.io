@@ -34,18 +34,16 @@ import {
 import { calculateSmartEntry, calculateTradePlan } from "../lib/tradeMath";
 
 const FALLBACK_SYMBOLS = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "SOLUSDT",
-  "BNBUSDT",
-  "XRPUSDT",
-  "DOGEUSDT",
-  "AVAXUSDT",
-  "LINKUSDT",
-  "SUIUSDT",
-  "NEARUSDT",
-  "ARBUSDT",
-  "OPUSDT",
+  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+  "AVAXUSDT", "LINKUSDT", "SUIUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT",
+  "FILUSDT", "FETUSDT", "ENAUSDT", "ADAUSDT", "DOTUSDT", "ATOMUSDT",
+  "UNIUSDT", "LTCUSDT", "BCHUSDT", "APTUSDT", "INJUSDT", "TIAUSDT",
+  "WIFUSDT", "1000PEPEUSDT", "TONUSDT", "SEIUSDT", "ORDIUSDT", "RUNEUSDT",
+  "AAVEUSDT", "LDOUSDT", "CRVUSDT", "WLDUSDT", "JUPUSDT", "PYTHUSDT",
+  "STRKUSDT", "ZROUSDT", "EIGENUSDT", "HYPEUSDT", "TAOUSDT", "RENDERUSDT",
+  "STXUSDT", "IMXUSDT", "GALAUSDT", "SANDUSDT", "MANAUSDT", "AXSUSDT",
+  "CHZUSDT", "ALGOUSDT", "VETUSDT", "ICPUSDT", "HBARUSDT", "XLMUSDT",
+  "TRXUSDT", "ETCUSDT", "XMRUSDT", "MKRUSDT", "KASUSDT", "WUSDT",
 ];
 
 const EXCLUDED_OF_SYMBOLS = new Set([
@@ -63,32 +61,35 @@ async function fetchLiquidFuturesSymbols() {
   if (cachedFuturesSymbols && Date.now() - cachedSymbolsAt < 300_000) {
     return cachedFuturesSymbols;
   }
-  try {
-    const tickers = await fetch("https://fapi.binance.com/fapi/v1/ticker/24hr").then((r) =>
-      r.json(),
-    );
-    if (Array.isArray(tickers)) {
-      const liquid = tickers
-        .filter(
-          (t) =>
-            typeof t.symbol === "string" &&
-            t.symbol.endsWith("USDT") &&
-            !t.symbol.includes("_") &&
-            !EXCLUDED_OF_SYMBOLS.has(t.symbol) &&
-            Number(t.quoteVolume) >= 15_000_000 &&
-            Number(t.count || 0) >= 15_000,
-        )
-        .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
-        .slice(0, 120)
-        .map((t) => t.symbol);
-      if (liquid.length >= 12) {
-        cachedFuturesSymbols = liquid;
-        cachedSymbolsAt = Date.now();
-        return liquid;
+  for (const tickerUrl of [
+    "https://fapi.binance.com/fapi/v1/ticker/24hr",
+    "https://api.binance.com/api/v3/ticker/24hr",
+  ]) {
+    try {
+      const tickers = await fetch(tickerUrl).then((r) => (r.ok ? r.json() : null));
+      if (Array.isArray(tickers)) {
+        const liquid = tickers
+          .filter(
+            (t) =>
+              typeof t.symbol === "string" &&
+              t.symbol.endsWith("USDT") &&
+              !t.symbol.includes("_") &&
+              !EXCLUDED_OF_SYMBOLS.has(t.symbol) &&
+              Number(t.quoteVolume) >= 15_000_000 &&
+              Number(t.count || 0) >= 15_000,
+          )
+          .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
+          .slice(0, 100)
+          .map((t) => t.symbol);
+        if (liquid.length >= 20) {
+          cachedFuturesSymbols = liquid;
+          cachedSymbolsAt = Date.now();
+          return liquid;
+        }
       }
+    } catch {
+      /* try next */
     }
-  } catch {
-    /* fallback below */
   }
   return FALLBACK_SYMBOLS;
 }

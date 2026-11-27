@@ -137,7 +137,7 @@ async def orderflow_prewarm_loop():
         except Exception as e:
             logger.debug(f"OrderFlow prewarm error: {e}")
         cycle += 1
-        await asyncio.sleep(11.0)
+        await asyncio.sleep(24.0)
 
 
 @asynccontextmanager
