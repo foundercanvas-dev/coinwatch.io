@@ -12,6 +12,7 @@ import {
   BellSlash,
   MagnifyingGlass,
   X,
+  CircleNotch,
 } from "@phosphor-icons/react";
 import CoinIcon from "./CoinIcon";
 import { PageHeader, LivePill, Segmented, StatCard, Metric } from "./ui";
@@ -759,7 +760,8 @@ export default function OrderFlowView({
                   <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
                     <div className="flex items-center gap-1.5">
                       {sig.status === "CONFIRMING" ? (
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-terminal-yellow/15 border border-terminal-yellow/35 text-terminal-yellow cw-num">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-terminal-yellow/15 border border-terminal-yellow/35 text-terminal-yellow cw-num">
+                          <CircleNotch weight="bold" className="w-3 h-3 animate-spin" />
                           CONFIRMING · {formatCountdown(Math.max(0, (IV_SEC[sig.timeframe] || 300) - ageSec))}
                         </span>
                       ) : isNew ? (
@@ -973,6 +975,11 @@ function OrderFlowSignalChart({
   const wallTrackerRef = useRef(new Map());
   const seededRef = useRef(false);
   const [hoveredHvn, setHoveredHvn] = useState(null);
+  const [chartNowSec, setChartNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const t = setInterval(() => setChartNowSec(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(t);
+  }, []);
   const [signalState, setSignalState] = useState({
     state: "WAITING",
     message: "Loading high-confidence zones…",
@@ -1790,17 +1797,30 @@ function OrderFlowSignalChart({
             )}
             {tfSetup && (
               <span
-                className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-semibold cw-num ${
                   tfSetup.status === "CONFIRMING"
-                    ? "bg-terminal-yellow/15 text-terminal-yellow"
+                    ? "bg-terminal-yellow/15 border border-terminal-yellow/35 text-terminal-yellow"
                     : isLong
-                      ? "bg-mint/15 text-mint"
-                      : "bg-coral/15 text-coral"
+                      ? "bg-mint/15 border border-mint/30 text-mint"
+                      : "bg-coral/15 border border-coral/30 text-coral"
                 }`}
               >
-                {tfSetup.status === "CONFIRMING"
-                  ? "CONFIRMING ABSORPTION"
-                  : `CONFIRMED ${tfSetup.side}`}
+                {tfSetup.status === "CONFIRMING" ? (
+                  <>
+                    <CircleNotch weight="bold" className="w-3 h-3 animate-spin" />
+                    <span>
+                      CONFIRMING ·{" "}
+                      {formatCountdown(
+                        Math.max(
+                          0,
+                          (IV_SEC[chartIv] || 300) - Math.max(0, chartNowSec - (tfSetup.time - TZ_SHIFT)),
+                        ),
+                      )}
+                    </span>
+                  </>
+                ) : (
+                  `CONFIRMED ${tfSetup.side}`
+                )}
               </span>
             )}
           </span>
