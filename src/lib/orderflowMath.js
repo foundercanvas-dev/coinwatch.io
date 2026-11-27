@@ -400,12 +400,19 @@ export function detectAbsorptionSignals(
 
       const movePct = cur.close > 0 ? ((latestClose - cur.close) / cur.close) * 100 : 0;
       const score = Math.min(99, baseScore + (deltaFlippedUp ? 8 : 0));
+      const isLive = i === candles.length - 1;
+      const nextCandle = candles[i + 1];
+      const reactionOk = Boolean(nextCandle && nextCandle.close > cur.close);
+      const status = !isLive && reactionOk ? "CONFIRMED" : "CONFIRMING";
       signals.push({
         id: `abs-long-${symbol}-${cur.time}`,
         type: "ABSORPTION",
         side: "LONG",
         symbol,
         time: cur.time,
+        confirmTime: nextCandle ? nextCandle.time : cur.time,
+        status,
+        isLive,
         price: cur.low,
         triggerClose: cur.close,
         open: cur.open,
@@ -441,12 +448,19 @@ export function detectAbsorptionSignals(
 
       const movePct = cur.close > 0 ? ((latestClose - cur.close) / cur.close) * 100 : 0;
       const score = Math.min(99, baseScore + (deltaFlippedDown ? 8 : 0));
+      const isLive = i === candles.length - 1;
+      const nextCandle = candles[i + 1];
+      const reactionOk = Boolean(nextCandle && nextCandle.close < cur.close);
+      const status = !isLive && reactionOk ? "CONFIRMED" : "CONFIRMING";
       signals.push({
         id: `abs-short-${symbol}-${cur.time}`,
         type: "ABSORPTION",
         side: "SHORT",
         symbol,
         time: cur.time,
+        confirmTime: nextCandle ? nextCandle.time : cur.time,
+        status,
+        isLive,
         price: cur.high,
         triggerClose: cur.close,
         open: cur.open,

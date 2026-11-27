@@ -757,11 +757,15 @@ export default function OrderFlowView({
 
                   <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
                     <div className="flex items-center gap-1.5">
-                      {isNew && (
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-mint/15 border border-mint/30 text-mint cw-num">
-                          NEW · {formatCountdown(remSec)}
+                      {sig.status === "CONFIRMING" ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-terminal-yellow/15 border border-terminal-yellow/35 text-terminal-yellow cw-num">
+                          CONFIRMING · {formatCountdown(Math.max(0, (IV_SEC[sig.timeframe] || 300) - ageSec))}
                         </span>
-                      )}
+                      ) : isNew ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-mint/15 border border-mint/30 text-mint cw-num">
+                          CONFIRMED · {formatCountdown(remSec)}
+                        </span>
+                      ) : null}
                       {(sig.stoppedOut || sig.reversed || sig.expired) && (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/[0.06] text-fog">
                           {sig.reversed ? "Reversed" : sig.stoppedOut ? "Stopped out" : "Expired"}
@@ -1707,7 +1711,7 @@ function OrderFlowSignalChart({
       }
     }
     const lines = [];
-    if (tfSetup && !setupClosed && showEntrySl) {
+    if (tfSetup && tfSetup.status !== "CONFIRMING" && !setupClosed && showEntrySl) {
       const lockKey = `${tfSetup.symbol}:${chartIv}:${tfSetup.time}:${tfSetup.side}`;
       let entryPrice = lockedEntrySlRef.current.entry;
       let stopPrice = lockedEntrySlRef.current.sl;
@@ -1781,6 +1785,21 @@ function OrderFlowSignalChart({
             {tfSetup?.time && (
               <span className="cw-num text-fog">
                 · {fmtTime((tfSetup.time - TZ_SHIFT) * 1000)}
+              </span>
+            )}
+            {tfSetup && (
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                  tfSetup.status === "CONFIRMING"
+                    ? "bg-terminal-yellow/15 text-terminal-yellow"
+                    : isLong
+                      ? "bg-mint/15 text-mint"
+                      : "bg-coral/15 text-coral"
+                }`}
+              >
+                {tfSetup.status === "CONFIRMING"
+                  ? "CONFIRMING ABSORPTION"
+                  : `CONFIRMED ${tfSetup.side}`}
               </span>
             )}
           </span>

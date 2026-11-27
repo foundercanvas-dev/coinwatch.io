@@ -10,7 +10,7 @@
  * - Step 8: Incremental DOM score refresh without full history recalculation
  */
 
-import { computeAtr14 } from "./orderflowMath";
+import { computeAtr14 } from "./orderflowMath.js";
 
 export function getXMultiplier(zoneVolume, avgZoneVolume) {
   if (!(avgZoneVolume > 0) || !(zoneVolume > 0)) return 0;
